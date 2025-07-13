@@ -9722,6 +9722,14 @@
             "hierarchy": []
         },
         {
+            "path": "Assets/full_project_structure_detailed.json",
+            "type": "TextAsset",
+            "dependencies": [
+                "Assets/full_project_structure_detailed.json"
+            ],
+            "hierarchy": []
+        },
+        {
             "path": "Assets/TextMesh Pro/Examples & Extras/Scripts/Benchmark04.cs",
             "type": "MonoScript",
             "dependencies": [
