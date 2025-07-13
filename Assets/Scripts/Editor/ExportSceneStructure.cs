@@ -1,58 +1,82 @@
 using System.IO;
+using System.Collections.Generic;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using System.Collections.Generic;
 
-public class ExportSceneStructure
+public class FullProjectExporter
 {
-    [MenuItem("Tools/Export Scene & Prefab Structure")]
-    public static void Export()
+    [MenuItem("Tools/Export Full Project Structure")]
+    public static void ExportAll()
     {
-        var exportPath = Path.Combine(Application.dataPath, "scene_structure.json");
-        var allEntries = new List<SceneEntry>();
+        var exportPath = Path.Combine(Application.dataPath, "full_project_structure.json");
+        var data = new FullProjectData { assets = new List<AssetEntry>() };
 
-        // Проходим по всем открытым сценам
-        for (int i = 0; i < SceneManager.sceneCount; i++)
+        // Перечисляем все активы в проекте
+        foreach (var path in AssetDatabase.GetAllAssetPaths())
         {
-            var scene = SceneManager.GetSceneAt(i);
-            if (!scene.isLoaded) continue;
+            if (!path.StartsWith("Assets/")) continue;
+            var type = AssetDatabase.GetMainAssetTypeAtPath(path)?.Name;
+            var entry = new AssetEntry
+            {
+                path = path,
+                type = type,
+                dependencies = AssetDatabase.GetDependencies(path)
+            };
 
-            foreach (GameObject root in scene.GetRootGameObjects())
-                CollectHierarchy(root, scene.name, allEntries);
-        }
+            // Если сцена, экспортируем её иерархию
+            if (type == "SceneAsset")
+            {
+                var scene = EditorSceneManager.OpenScene(path, OpenSceneMode.Additive);
+                entry.hierarchy = CollectHierarchy(scene, Path.GetFileNameWithoutExtension(path));
+                EditorSceneManager.CloseScene(scene, true);
+            }
+            // Если префаб, тоже экспортируем
+            else if (type == "GameObject")
+            {
+                var go = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                entry.hierarchy = CollectHierarchy(go, Path.GetFileNameWithoutExtension(path));
+            }
 
-        // Проходим по всем префабам в Assets
-        var guids = AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" });
-        foreach (var guid in guids)
-        {
-            var path = AssetDatabase.GUIDToAssetPath(guid);
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-            if (prefab == null) continue;
-            CollectHierarchy(prefab, Path.GetFileNameWithoutExtension(path), allEntries);
+            data.assets.Add(entry);
         }
 
         // Сериализуем в JSON
-        var json = JsonUtility.ToJson(new SceneCollection { scenes = allEntries }, prettyPrint: true);
-        File.WriteAllText(exportPath, json);
+        var json = JsonUtility.ToJson(data, prettyPrint: true);
+        File.WriteAllText(Path.Combine(Application.dataPath, "full_project_structure.json"), json);
         AssetDatabase.Refresh();
-        Debug.Log($"Scene structure exported to {exportPath}");
+        Debug.Log($"Full project structure exported to {exportPath}");
     }
 
-    static void CollectHierarchy(GameObject go, string containerName, List<SceneEntry> list)
+    static List<HierarchyEntry> CollectHierarchy(Scene scene, string container)
     {
-        var entry = new SceneEntry
+        var list = new List<HierarchyEntry>();
+        foreach (var root in scene.GetRootGameObjects())
+            Collect(root, container, list);
+        return list;
+    }
+
+    static List<HierarchyEntry> CollectHierarchy(GameObject prefab, string container)
+    {
+        var list = new List<HierarchyEntry>();
+        Collect(prefab, container, list);
+        return list;
+    }
+
+    static void Collect(GameObject go, string container, List<HierarchyEntry> list)
+    {
+        var entry = new HierarchyEntry
         {
-            container = containerName,
+            container = container,
             path = GetFullPath(go),
             components = new List<string>()
         };
         foreach (var comp in go.GetComponents<Component>())
-            entry.components.Add(comp == null ? "Missing" : comp.GetType().Name);
-
+            entry.components.Add(comp ? comp.GetType().Name : "Missing");
         list.Add(entry);
         foreach (Transform child in go.transform)
-            CollectHierarchy(child.gameObject, containerName, list);
+            Collect(child.gameObject, container, list);
     }
 
     static string GetFullPath(GameObject go)
@@ -63,7 +87,16 @@ public class ExportSceneStructure
     }
 
     [System.Serializable]
-    public class SceneEntry
+    public class AssetEntry
+    {
+        public string path;
+        public string type;
+        public string[] dependencies;
+        public List<HierarchyEntry> hierarchy;
+    }
+
+    [System.Serializable]
+    public class HierarchyEntry
     {
         public string container;
         public string path;
@@ -71,8 +104,8 @@ public class ExportSceneStructure
     }
 
     [System.Serializable]
-    public class SceneCollection
+    public class FullProjectData
     {
-        public List<SceneEntry> scenes;
+        public List<AssetEntry> assets;
     }
 }
