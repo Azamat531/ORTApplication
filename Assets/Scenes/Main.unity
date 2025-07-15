@@ -1181,11 +1181,9 @@ MonoBehaviour:
   topicsContent: {fileID: 1732472962}
   subtopicsPanel: {fileID: 702391595}
   subtopicsHeaderText: {fileID: 678205745}
+  subtopicButtonPrefab: {fileID: 6676084749519263431, guid: 8293d69f971524b448a243343a2f3afc, type: 3}
   subtopicsContent: {fileID: 1227780253}
-  subtopicButtonPrefab: {fileID: 6676084749519263431, guid: efde9da755dd2de419d7ec7d3ea7afaf, type: 3}
-  subtopicsBackButton: {fileID: 443453554}
-  checkTestPanel: {fileID: 953657008}
-  checkTestController: {fileID: 953657012}
+  backFromSubtopicsButton: {fileID: 443453554}
 --- !u!1 &402191730
 GameObject:
   m_ObjectHideFlags: 0
@@ -3542,14 +3540,12 @@ MonoBehaviour:
   loadingPanel: {fileID: 967697366}
   testPanel: {fileID: 1407225391}
   resultPanel: {fileID: 1183608192}
-  subtopicsPanel: {fileID: 702391595}
-  skipButton: {fileID: 677561575}
-  startButton: {fileID: 1902307004}
   scrollRect: {fileID: 1407225393}
   questionEntryPrefab: {fileID: 6137562722013267784, guid: ec1a664568fe9944e9dabf1100046c82, type: 3}
   finishButtonPrefab: {fileID: 1729858619149754558, guid: 06c545304101dbb4b93834480f5af9ee, type: 3}
   resultPanelText: {fileID: 1605654856}
   resultPanelImage: {fileID: 1183608196}
+  startTestButton: {fileID: 1902307004}
 --- !u!1 &967629993
 GameObject:
   m_ObjectHideFlags: 0

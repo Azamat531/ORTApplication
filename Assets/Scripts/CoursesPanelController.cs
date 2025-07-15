@@ -3,43 +3,28 @@
 //using TMPro;
 
 ///// <summary>
-///// Управление меню курсов: список предметов → тем → подтем (в отдельной панели).
+///// Управление меню курсов: список предметов → тем → подтем.
 ///// Данные берутся из ScriptableObject CoursesData.
 ///// </summary>
 //public class CoursesPanelController : MonoBehaviour
 //{
 //    [Header("Data")]
-//    [Tooltip("ScriptableObject с данными по курсам")]
 //    public CoursesData coursesData;
 
 //    [Header("UI Elements")]
-//    [Tooltip("ScrollView для списока предметов")]
 //    public GameObject subjectsScrollView;
-//    [Tooltip("Префаб кнопки предмета")]
 //    public GameObject subjectButtonPrefab;
-//    [Tooltip("Content внутри SubjectsScrollView")]
 //    public Transform subjectsContent;
 
-//    [Tooltip("Контейнер для списка тем")]
 //    public GameObject topicsContainer;
-//    [Tooltip("Заголовок внутри TopicsContainer")]
-//    public TMP_Text headerText;
-//    [Tooltip("Префаб кнопки темы")]
+//    public TMP_Text topicsHeaderText;
 //    public GameObject topicButtonPrefab;
-//    [Tooltip("Content внутри TopicsContainer ScrollView")]
 //    public Transform topicsContent;
 
-//    [Header("Subtopics Panel")]
-//    [Tooltip("Отдельная панель с подтемами")]
-//    public GameObject subtopicsPanel;
-//    [Tooltip("Заголовок панели подтем")]
+//    public GameObject subtopicsContainer;
 //    public TMP_Text subtopicsHeaderText;
-//    [Tooltip("Контейнер кнопок подтем")]
-//    public Transform subtopicsContent;
-//    [Tooltip("Префаб кнопки подтемы")]
 //    public GameObject subtopicButtonPrefab;
-//    [Tooltip("Кнопка Назад")]
-//    public Button subtopicsBackButton;
+//    public Transform subtopicsContent;
 
 //    private CoursesData.Subject[] subjects;
 
@@ -55,14 +40,11 @@
 //        ShowSubjects();
 //    }
 
-//    /// <summary>
-//    /// Отображает список предметов.
-//    /// </summary>
 //    void ShowSubjects()
 //    {
 //        subjectsScrollView.SetActive(true);
 //        topicsContainer.SetActive(false);
-//        subtopicsPanel.SetActive(false);
+//        subtopicsContainer.SetActive(false);
 //        ClearChildren(subjectsContent);
 
 //        foreach (var subj in subjects)
@@ -77,17 +59,14 @@
 //        }
 //    }
 
-//    /// <summary>
-//    /// Отображает список тем выбранного предмета.
-//    /// </summary>
 //    void ShowTopics(CoursesData.Subject subj)
 //    {
 //        subjectsScrollView.SetActive(false);
 //        topicsContainer.SetActive(true);
-//        subtopicsPanel.SetActive(false);
+//        subtopicsContainer.SetActive(false);
 //        ClearChildren(topicsContent);
 
-//        headerText.text = subj.name;
+//        topicsHeaderText.text = subj.name;
 
 //        foreach (var topic in subj.topics)
 //        {
@@ -97,17 +76,14 @@
 
 //            var t = topic;
 //            btn.onClick.RemoveAllListeners();
-//            btn.onClick.AddListener(() => ShowSubtopicsPanel(t));
+//            btn.onClick.AddListener(() => ShowSubtopics(subj, t));
 //        }
 //    }
 
-//    /// <summary>
-//    /// Показывает отдельную панель подтем.
-//    /// </summary>
-//    void ShowSubtopicsPanel(CoursesData.Topic topic)
+//    void ShowSubtopics(CoursesData.Subject subject, CoursesData.Topic topic)
 //    {
 //        topicsContainer.SetActive(false);
-//        subtopicsPanel.SetActive(true);
+//        subtopicsContainer.SetActive(true);
 //        ClearChildren(subtopicsContent);
 
 //        subtopicsHeaderText.text = topic.name;
@@ -117,38 +93,16 @@
 //            var btnGO = Instantiate(subtopicButtonPrefab, subtopicsContent);
 //            var btn = btnGO.GetComponent<Button>();
 //            btnGO.GetComponentInChildren<TMP_Text>().text = sub.name;
-
-//            var s = sub;
 //            btn.onClick.RemoveAllListeners();
-//            btn.onClick.AddListener(() =>
-//            {
-//                Debug.Log($"[Subtopic] Выбрана подтема: {s.name}");
-//                // Здесь добавить: открыть видео, мини-тест и т.д.
-//            });
+//            btn.onClick.AddListener(() => Debug.Log($"Subtopic selected: {sub.name}"));
 //        }
-
-//        subtopicsBackButton.onClick.RemoveAllListeners();
-//        subtopicsBackButton.onClick.AddListener(() =>
-//        {
-//            subtopicsPanel.SetActive(false);
-//            topicsContainer.SetActive(true);
-//        });
 //    }
 
-//    /// <summary>
-//    /// Возврат к списку предметов. Привязать к кнопке "Назад".
-//    /// </summary>
 //    public void BackToSubjects()
 //    {
-//        subtopicsPanel.SetActive(false);
-//        topicsContainer.SetActive(false);
-//        subjectsScrollView.SetActive(true);
 //        ShowSubjects();
 //    }
 
-//    /// <summary>
-//    /// Удаляет всех детей из указанного Transform.
-//    /// </summary>
 //    void ClearChildren(Transform parent)
 //    {
 //        foreach (Transform child in parent)
@@ -161,7 +115,8 @@ using UnityEngine.UI;
 using TMPro;
 
 /// <summary>
-/// Управление меню курсов: список предметов → тем → подтем (в отдельной панели) → запуск теста.
+/// Управление меню курсов: список предметов → тем → подтем.
+/// Данные берутся из ScriptableObject CoursesData.
 /// </summary>
 public class CoursesPanelController : MonoBehaviour
 {
@@ -178,29 +133,28 @@ public class CoursesPanelController : MonoBehaviour
     public GameObject topicButtonPrefab;
     public Transform topicsContent;
 
-    [Header("Subtopics Panel")]
     public GameObject subtopicsPanel;
     public TMP_Text subtopicsHeaderText;
-    public Transform subtopicsContent;
     public GameObject subtopicButtonPrefab;
-    public Button subtopicsBackButton;
-
-    [Header("Test Panel")]
-    public GameObject checkTestPanel;
-    public CheckTestController checkTestController;
+    public Transform subtopicsContent;
+    public Button backFromSubtopicsButton;
 
     private CoursesData.Subject[] subjects;
+    private CoursesData.Subject currentSubject;
 
-    void OnEnable()
+    private void OnEnable()
     {
         if (coursesData == null)
         {
-            Debug.LogError("[CoursesPanelController] CoursesData asset is not assigned!");
+            Debug.LogError("[CoursesPanelController] CoursesData asset is not assigned in Inspector!");
             return;
         }
 
         subjects = coursesData.subjects;
         ShowSubjects();
+
+        if (backFromSubtopicsButton != null)
+            backFromSubtopicsButton.onClick.AddListener(BackToTopics);
     }
 
     void ShowSubjects()
@@ -208,7 +162,6 @@ public class CoursesPanelController : MonoBehaviour
         subjectsScrollView.SetActive(true);
         topicsContainer.SetActive(false);
         subtopicsPanel.SetActive(false);
-        checkTestPanel.SetActive(false);
         ClearChildren(subjectsContent);
 
         foreach (var subj in subjects)
@@ -228,10 +181,10 @@ public class CoursesPanelController : MonoBehaviour
         subjectsScrollView.SetActive(false);
         topicsContainer.SetActive(true);
         subtopicsPanel.SetActive(false);
-        checkTestPanel.SetActive(false);
         ClearChildren(topicsContent);
 
         headerText.text = subj.name;
+        currentSubject = subj;
 
         foreach (var topic in subj.topics)
         {
@@ -239,19 +192,16 @@ public class CoursesPanelController : MonoBehaviour
             var btn = btnGO.GetComponent<Button>();
             btnGO.GetComponentInChildren<TMP_Text>().text = topic.name;
 
-            var s = subj;
             var t = topic;
             btn.onClick.RemoveAllListeners();
-            btn.onClick.AddListener(() => StartTestForTopic(s, t));
-            // Или для перехода к подтемам: btn.onClick.AddListener(() => ShowSubtopicsPanel(t));
+            btn.onClick.AddListener(() => ShowSubtopics(t));
         }
     }
 
-    void ShowSubtopicsPanel(CoursesData.Topic topic)
+    void ShowSubtopics(CoursesData.Topic topic)
     {
         topicsContainer.SetActive(false);
         subtopicsPanel.SetActive(true);
-        checkTestPanel.SetActive(false);
         ClearChildren(subtopicsContent);
 
         subtopicsHeaderText.text = topic.name;
@@ -262,39 +212,23 @@ public class CoursesPanelController : MonoBehaviour
             var btn = btnGO.GetComponent<Button>();
             btnGO.GetComponentInChildren<TMP_Text>().text = sub.name;
 
-            var s = sub;
             btn.onClick.RemoveAllListeners();
             btn.onClick.AddListener(() =>
             {
-                Debug.Log($"[Subtopic] Выбрана подтема: {s.name}");
-                // TODO: Запуск видео или мини-теста
+                Debug.Log($"Subtopic selected: {sub.name}");
+                // TODO: загрузка видео или мини-теста по подтеме
             });
         }
-
-        subtopicsBackButton.onClick.RemoveAllListeners();
-        subtopicsBackButton.onClick.AddListener(() =>
-        {
-            subtopicsPanel.SetActive(false);
-            topicsContainer.SetActive(true);
-        });
     }
 
-    void StartTestForTopic(CoursesData.Subject subject, CoursesData.Topic topic)
+    void BackToTopics()
     {
-        subjectsScrollView.SetActive(false);
-        topicsContainer.SetActive(false);
         subtopicsPanel.SetActive(false);
-        checkTestPanel.SetActive(true);
-
-        checkTestController.StartTest(subject, topic);
+        topicsContainer.SetActive(true);
     }
 
     public void BackToSubjects()
     {
-        subtopicsPanel.SetActive(false);
-        topicsContainer.SetActive(false);
-        checkTestPanel.SetActive(false);
-        subjectsScrollView.SetActive(true);
         ShowSubjects();
     }
 
