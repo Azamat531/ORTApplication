@@ -1,8 +1,11 @@
+// Assets/Scripts/Data/TestQuestions.cs
 using System.Collections.Generic;
 using UnityEngine;
 
-[CreateAssetMenu(fileName = "CheckTestQuestions", menuName = "Education/Check Test Questions Hierarchical")]
-public class CheckTestQuestions : ScriptableObject
+[CreateAssetMenu(
+    fileName = "TestQuestions",
+    menuName = "Education/Test Questions Hierarchical")]
+public class TestQuestions : ScriptableObject
 {
     [System.Serializable]
     public class Question
@@ -14,10 +17,17 @@ public class CheckTestQuestions : ScriptableObject
     }
 
     [System.Serializable]
-    public class Topic
+    public class Subtopic
     {
         public string name;
         public List<Question> questions;
+    }
+
+    [System.Serializable]
+    public class Topic
+    {
+        public string name;
+        public List<Subtopic> subtopics;
     }
 
     [System.Serializable]

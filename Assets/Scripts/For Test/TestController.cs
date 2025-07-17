@@ -1,139 +1,32 @@
-﻿//using System.Collections;
-//using System.Collections.Generic;
-//using UnityEngine;
-//using UnityEngine.Networking;
-//using UnityEngine.UI;
-//using TMPro;
-
-//public class TestController : MonoBehaviour
-//{
-//    [Header("Quiz Setup")]
-//    [SerializeField] private ScrollRect scrollRect;
-//    [SerializeField] private GameObject questionEntryPrefab;
-//    [SerializeField] private GameObject finishButtonPrefab;
-//    [SerializeField] private List<QuestionData> questions;
-
-//    [Header("Result Panel")]
-//    [SerializeField] private GameObject resultPanel;
-//    [SerializeField] private Image resultPanelImage;
-//    [SerializeField] private TextMeshProUGUI resultPanelText;
-
-//    [System.Serializable]
-//    public class QuestionData
-//    {
-//        public string questionText;
-//        public string imageUrl;
-//        [HideInInspector] public Sprite imageSprite;
-//        public List<string> options;
-//        public int correctIndex;
-//    }
-
-//    private void Start()
-//    {
-//        // Скрываем панель результата до завершения теста
-//        resultPanel.SetActive(false);
-//        StartCoroutine(PreloadAllImages());
-//    }
-
-//    private IEnumerator PreloadAllImages()
-//    {
-//        for (int i = 0; i < questions.Count; i++)
-//        {
-//            if (questions[i].imageSprite != null) continue;
-//            using var uwr = UnityWebRequestTexture.GetTexture(questions[i].imageUrl);
-//            yield return uwr.SendWebRequest();
-//            if (uwr.result == UnityWebRequest.Result.Success)
-//            {
-//                var tex = DownloadHandlerTexture.GetContent(uwr);
-//                questions[i].imageSprite =
-//                    Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), Vector2.one * 0.5f);
-//            }
-//        }
-//        PopulateQuestions();
-//    }
-
-//    private void PopulateQuestions()
-//    {
-//        var content = scrollRect.content;
-//        foreach (Transform child in content)
-//            Destroy(child.gameObject);
-
-//        for (int i = 0; i < questions.Count; i++)
-//        {
-//            var data = questions[i];
-//            var entryGO = Instantiate(questionEntryPrefab, content);
-//            entryGO.GetComponent<QuestionEntry>()
-//                   .Setup(data.questionText, data.imageSprite, data.options);
-//        }
-
-//        // Добавляем кнопку "Закончить" в конец списка
-//        var btnGO = Instantiate(finishButtonPrefab, content);
-//        btnGO.GetComponent<Button>()
-//             .onClick.AddListener(ShowResult);
-//    }
-
-//    private void ShowResult()
-//    {
-//        // Подсчёт правильных ответов
-//        int correct = 0;
-//        var groups = scrollRect.content.GetComponentsInChildren<ToggleGroup>();
-//        for (int i = 0; i < groups.Length; i++)
-//        {
-//            var toggles = groups[i].GetComponentsInChildren<Toggle>();
-//            int selected = System.Array.FindIndex(toggles, t => t.isOn);
-//            if (selected >= 0 && selected == questions[i].correctIndex)
-//                correct++;
-//        }
-
-//        // Скрываем тестовую панель
-//        scrollRect.gameObject.SetActive(false);
-
-//        // Выбор цвета и текста результата
-//        if (correct >= 8)
-//        {
-//            resultPanelImage.color = new Color32(76, 175, 80, 255);
-//            resultPanelText.color = Color.white;
-//            resultPanelText.text = $"{questions.Count} суроодон {correct} туура.\nӨтө жакшы жыйынтык!!!\nКийинки темага өтө берсеңиз болот";
-//        }
-//        else if (correct >= 5)
-//        {
-//            resultPanelImage.color = new Color32(255, 193, 7, 255);
-//            resultPanelText.color = new Color32(0x33, 0x33, 0x33, 255);
-//            resultPanelText.text = $"{questions.Count} суроодон {correct} туура.\nОрточо жыйынтык.\nТеманы үйрөнүшүңүз керек";
-//        }
-//        else
-//        {
-//            resultPanelImage.color = new Color32(244, 67, 54, 255);
-//            resultPanelText.color = Color.white;
-//            resultPanelText.text = $"{questions.Count} суроодон {correct} туура.\nНачар жыйынтык.\nТеманы үйрөнүшүңүз керек";
-//        }
-
-//        // Отображаем панель результата
-//        resultPanel.SetActive(true);
-//    }
-//}
-
-using System.Collections;
-using System.Collections.Generic;
+﻿// Assets/Scripts/For Test/TestController.cs
 using UnityEngine;
-using UnityEngine.Networking;
 using UnityEngine.UI;
 using TMPro;
+using UnityEngine.Networking;
+using System.Collections;
+using System.Collections.Generic;
 
 public class TestController : MonoBehaviour
 {
-    [Header("Panels")]
-    [SerializeField] private GameObject loadingPanel;     // LoadingPanel
-    [SerializeField] private GameObject testPanel;        // TestPanel
-    [SerializeField] private GameObject resultPanel;      // ResultPanel
+    [Header("Data")]
+    public TestQuestions questionsData;
+
+    [Header("Panels & UI")]
+    public GameObject beginImage;
+    public GameObject loadingPanel;
+    public GameObject testPanel;
+    public GameObject testPanelParent;
 
     [Header("Quiz Setup")]
-    [SerializeField] private ScrollRect scrollRect;
-    [SerializeField] private GameObject questionEntryPrefab;
-    [SerializeField] private GameObject finishButtonPrefab;
-    [SerializeField] private TextMeshProUGUI resultPanelText;
-    [SerializeField] private Image resultPanelImage;
-    [SerializeField] private List<QuestionData> questions;
+    public Button startTestButton;
+    public ScrollRect scrollRect;
+    public GameObject questionEntryPrefab;
+    public GameObject finishButtonPrefab;
+
+    [Header("Navigation")]
+    public Button menuButtonPrefab;  // префаб кнопки «Меню»
+
+    private List<QuestionData> questions = new List<QuestionData>();
 
     [System.Serializable]
     public class QuestionData
@@ -145,13 +38,48 @@ public class TestController : MonoBehaviour
         public int correctIndex;
     }
 
-    void Start()
+    private void OnEnable()
     {
-        // Включаем только LoadingPanel
-        loadingPanel.SetActive(true);
-        testPanel.SetActive(false);
-        resultPanel.SetActive(false);
+        startTestButton.onClick.RemoveAllListeners();
+        startTestButton.onClick.AddListener(StartButtonPressed);
+    }
 
+    public void StartTest(
+        CoursesData.Subject subject,
+        CoursesData.Topic topic,
+        CoursesData.Subtopic subtopic)
+    {
+        beginImage.SetActive(true);
+        loadingPanel.SetActive(false);
+        testPanel.SetActive(false);
+        questions.Clear();
+
+        var soSubj = questionsData.subjects.Find(s => s.name == subject.name);
+        var soTopic = soSubj?.topics.Find(t => t.name == topic.name);
+        var soSub = soTopic?.subtopics.Find(st => st.name == subtopic.name);
+
+        if (soSub == null)
+        {
+            Debug.LogError($"Вопросы не найдены для {subject.name} → {topic.name} → {subtopic.name}");
+            return;
+        }
+
+        foreach (var q in soSub.questions)
+        {
+            questions.Add(new QuestionData
+            {
+                questionText = q.questionText,
+                imageUrl = q.imageUrl,
+                options = new List<string>(q.options),
+                correctIndex = q.correctIndex
+            });
+        }
+    }
+
+    public void StartButtonPressed()
+    {
+        beginImage.SetActive(false);
+        loadingPanel.SetActive(true);
         StartCoroutine(PreloadAllImages());
     }
 
@@ -167,14 +95,14 @@ public class TestController : MonoBehaviour
                 {
                     var tex = DownloadHandlerTexture.GetContent(uwr);
                     q.imageSprite = Sprite.Create(
-                        tex, new Rect(0, 0, tex.width, tex.height), Vector2.one * 0.5f);
+                        tex,
+                        new Rect(0, 0, tex.width, tex.height),
+                        Vector2.one * 0.5f);
                 }
             }
         }
 
         PopulateQuestions();
-
-        // Переключаемся на тест
         loadingPanel.SetActive(false);
         testPanel.SetActive(true);
     }
@@ -182,55 +110,70 @@ public class TestController : MonoBehaviour
     private void PopulateQuestions()
     {
         var content = scrollRect.content;
-        foreach (Transform ch in content) Destroy(ch.gameObject);
+        foreach (Transform c in content) Destroy(c.gameObject);
 
-        for (int i = 0; i < questions.Count; i++)
+        foreach (var q in questions)
         {
-            var data = questions[i];
             var go = Instantiate(questionEntryPrefab, content);
-            go.GetComponent<QuestionEntry>()
-              .Setup(data.questionText, data.imageSprite, data.options);
+            go.GetComponent<QuestionEntry>().Setup(
+                q.questionText, q.imageSprite, q.options);
         }
 
-        var btnGO = Instantiate(finishButtonPrefab, content);
-        btnGO.GetComponent<Button>()
-             .onClick.AddListener(ShowResult);
+        var finishGO = Instantiate(finishButtonPrefab, content);
+        finishGO.GetComponent<Button>().onClick.AddListener(ShowResult);
     }
 
+    /// <summary>
+    /// Подсвечивает правильные ответы, показывает статистику и добавляет кнопку «Меню», которая просто закрывает тест.
+    /// </summary>
     private void ShowResult()
     {
-        // Считаем правильные
-        int correct = 0;
+        int correctCount = 0;
         var groups = scrollRect.content.GetComponentsInChildren<ToggleGroup>();
-        for (int i = 0; i < groups.Length; i++)
+        for (int i = 0; i < groups.Length && i < questions.Count; i++)
         {
             var toggles = groups[i].GetComponentsInChildren<Toggle>();
-            int selected = System.Array.FindIndex(toggles, t => t.isOn);
-            if (selected == questions[i].correctIndex)
-                correct++;
+            foreach (var t in toggles)
+                t.interactable = false;
+
+            int sel = System.Array.FindIndex(toggles, t => t.isOn);
+            if (sel == questions[i].correctIndex)
+                correctCount++;
+
+            int correctIdx = questions[i].correctIndex;
+            if (correctIdx >= 0 && correctIdx < toggles.Length)
+            {
+                var label = toggles[correctIdx].GetComponentInChildren<TMP_Text>();
+                if (label != null) label.color = Color.green;
+            }
         }
 
-        // Скрываем тестовую панель
-        testPanel.SetActive(false);
+        // Скрываем кнопку Finish
+        var content = scrollRect.content;
+        int finishIndex = content.childCount - 1;
+        content.GetChild(finishIndex).gameObject.SetActive(false);
 
-        // Выбираем цвет и текст результата
-        if (correct >= 8)
-        {
-            resultPanelImage.color = new Color32(76, 175, 80, 255);
-            resultPanelText.text = $"Отлично! {correct}/{questions.Count}";
-        }
-        else if (correct >= 5)
-        {
-            resultPanelImage.color = new Color32(255, 193, 7, 255);
-            resultPanelText.color = new Color32(0x33, 0x33, 0x33, 255);
-            resultPanelText.text = $"Неплохо: {correct}/{questions.Count}";
-        }
-        else
-        {
-            resultPanelImage.color = new Color32(244, 67, 54, 255);
-            resultPanelText.text = $"Попробуйте ещё: {correct}/{questions.Count}";
-        }
+        // Статистика
+        var statsGO = new GameObject("StatsText",
+            typeof(RectTransform),
+            typeof(CanvasRenderer),
+            typeof(TextMeshProUGUI));
+        statsGO.transform.SetParent(content, false);
+        var statsText = statsGO.GetComponent<TextMeshProUGUI>();
+        statsText.text = $"Правильно {correctCount} из {questions.Count}";
+        statsText.fontSize = 64;
+        statsText.color = Color.black;
+        statsText.alignment = TextAlignmentOptions.Center;
+        statsGO.transform.SetSiblingIndex(finishIndex);
 
-        resultPanel.SetActive(true);
+        // Кнопка «Меню» — просто закрывает тестовую панель
+        var menuBtn = Instantiate(menuButtonPrefab, content);
+        menuBtn.GetComponentInChildren<TMP_Text>().text = "Меню";
+        menuBtn.onClick.RemoveAllListeners();
+        menuBtn.onClick.AddListener(() =>
+        {
+            testPanelParent.SetActive(false);
+        });
+        menuBtn.transform.SetSiblingIndex(finishIndex + 1);
     }
 }

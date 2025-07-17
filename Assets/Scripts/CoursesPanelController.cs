@@ -1,122 +1,15 @@
-﻿//using UnityEngine;
-//using UnityEngine.UI;
-//using TMPro;
-
-///// <summary>
-///// Управление меню курсов: список предметов → тем → подтем.
-///// Данные берутся из ScriptableObject CoursesData.
-///// </summary>
-//public class CoursesPanelController : MonoBehaviour
-//{
-//    [Header("Data")]
-//    public CoursesData coursesData;
-
-//    [Header("UI Elements")]
-//    public GameObject subjectsScrollView;
-//    public GameObject subjectButtonPrefab;
-//    public Transform subjectsContent;
-
-//    public GameObject topicsContainer;
-//    public TMP_Text topicsHeaderText;
-//    public GameObject topicButtonPrefab;
-//    public Transform topicsContent;
-
-//    public GameObject subtopicsContainer;
-//    public TMP_Text subtopicsHeaderText;
-//    public GameObject subtopicButtonPrefab;
-//    public Transform subtopicsContent;
-
-//    private CoursesData.Subject[] subjects;
-
-//    void OnEnable()
-//    {
-//        if (coursesData == null)
-//        {
-//            Debug.LogError("[CoursesPanelController] CoursesData asset is not assigned in Inspector!");
-//            return;
-//        }
-
-//        subjects = coursesData.subjects;
-//        ShowSubjects();
-//    }
-
-//    void ShowSubjects()
-//    {
-//        subjectsScrollView.SetActive(true);
-//        topicsContainer.SetActive(false);
-//        subtopicsContainer.SetActive(false);
-//        ClearChildren(subjectsContent);
-
-//        foreach (var subj in subjects)
-//        {
-//            var btnGO = Instantiate(subjectButtonPrefab, subjectsContent);
-//            var btn = btnGO.GetComponent<Button>();
-//            btnGO.GetComponentInChildren<TMP_Text>().text = subj.name;
-
-//            var s = subj;
-//            btn.onClick.RemoveAllListeners();
-//            btn.onClick.AddListener(() => ShowTopics(s));
-//        }
-//    }
-
-//    void ShowTopics(CoursesData.Subject subj)
-//    {
-//        subjectsScrollView.SetActive(false);
-//        topicsContainer.SetActive(true);
-//        subtopicsContainer.SetActive(false);
-//        ClearChildren(topicsContent);
-
-//        topicsHeaderText.text = subj.name;
-
-//        foreach (var topic in subj.topics)
-//        {
-//            var btnGO = Instantiate(topicButtonPrefab, topicsContent);
-//            var btn = btnGO.GetComponent<Button>();
-//            btnGO.GetComponentInChildren<TMP_Text>().text = topic.name;
-
-//            var t = topic;
-//            btn.onClick.RemoveAllListeners();
-//            btn.onClick.AddListener(() => ShowSubtopics(subj, t));
-//        }
-//    }
-
-//    void ShowSubtopics(CoursesData.Subject subject, CoursesData.Topic topic)
-//    {
-//        topicsContainer.SetActive(false);
-//        subtopicsContainer.SetActive(true);
-//        ClearChildren(subtopicsContent);
-
-//        subtopicsHeaderText.text = topic.name;
-
-//        foreach (var sub in topic.subtopics)
-//        {
-//            var btnGO = Instantiate(subtopicButtonPrefab, subtopicsContent);
-//            var btn = btnGO.GetComponent<Button>();
-//            btnGO.GetComponentInChildren<TMP_Text>().text = sub.name;
-//            btn.onClick.RemoveAllListeners();
-//            btn.onClick.AddListener(() => Debug.Log($"Subtopic selected: {sub.name}"));
-//        }
-//    }
-
-//    public void BackToSubjects()
-//    {
-//        ShowSubjects();
-//    }
-
-//    void ClearChildren(Transform parent)
-//    {
-//        foreach (Transform child in parent)
-//            Destroy(child.gameObject);
-//    }
-//}
-
+﻿// Assets/Scripts/CoursesPanelController.cs
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 
 /// <summary>
-/// Управление меню курсов: список предметов → тем → подтем.
-/// Данные берутся из ScriptableObject CoursesData.
+/// Управление меню курсов: предметы → темы → подтемы.
+/// При выборе подтемы открывается панель VideoScreen;
+/// кнопка «Тест» на видео‑панели запускает тест по выбранной подтеме.
+/// </summary>
+/// using UnityEngine;
+/// панели запускает тест по выбранной подтеме.
 /// </summary>
 public class CoursesPanelController : MonoBehaviour
 {
@@ -129,112 +22,128 @@ public class CoursesPanelController : MonoBehaviour
     public Transform subjectsContent;
 
     public GameObject topicsContainer;
-    public TMP_Text headerText;
     public GameObject topicButtonPrefab;
     public Transform topicsContent;
+    public TMP_Text headerText;
 
     public GameObject subtopicsPanel;
-    public TMP_Text subtopicsHeaderText;
     public GameObject subtopicButtonPrefab;
     public Transform subtopicsContent;
     public Button backFromSubtopicsButton;
 
-    private CoursesData.Subject[] subjects;
+    [Header("Video Screen")]
+    public GameObject videoScreenPanel;
+    public VideoStreamPlayer videoStreamPlayer;
+    public Button testButton;
+
+    [Header("Test Controller")]
+    public TestController testController;
+
     private CoursesData.Subject currentSubject;
+    private CoursesData.Topic currentTopic;
+    private CoursesData.Subtopic currentSubtopic;
 
     private void OnEnable()
     {
         if (coursesData == null)
         {
-            Debug.LogError("[CoursesPanelController] CoursesData asset is not assigned in Inspector!");
+            Debug.LogError("CoursesData не назначен в Inspector!");
             return;
         }
 
-        subjects = coursesData.subjects;
-        ShowSubjects();
+        backFromSubtopicsButton?.onClick.RemoveAllListeners();
+        backFromSubtopicsButton?.onClick.AddListener(ShowTopicsList);
 
-        if (backFromSubtopicsButton != null)
-            backFromSubtopicsButton.onClick.AddListener(BackToTopics);
+        testButton?.onClick.RemoveAllListeners();
+        testButton?.onClick.AddListener(OnTestButtonPressed);
+
+        ShowSubjectsList();
     }
 
-    void ShowSubjects()
+    void ShowSubjectsList()
     {
         subjectsScrollView.SetActive(true);
         topicsContainer.SetActive(false);
         subtopicsPanel.SetActive(false);
+        videoScreenPanel.SetActive(false);
+
         ClearChildren(subjectsContent);
-
-        foreach (var subj in subjects)
+        foreach (var subj in coursesData.subjects)
         {
-            var btnGO = Instantiate(subjectButtonPrefab, subjectsContent);
-            var btn = btnGO.GetComponent<Button>();
-            btnGO.GetComponentInChildren<TMP_Text>().text = subj.name;
-
+            var btn = Instantiate(subjectButtonPrefab, subjectsContent).GetComponent<Button>();
+            btn.GetComponentInChildren<TMP_Text>().text = subj.name;
             var s = subj;
-            btn.onClick.RemoveAllListeners();
-            btn.onClick.AddListener(() => ShowTopics(s));
+            btn.onClick.AddListener(() => ShowTopicsList(s));
         }
     }
 
-    void ShowTopics(CoursesData.Subject subj)
+    void ShowTopicsList(CoursesData.Subject subj)
     {
+        currentSubject = subj;
         subjectsScrollView.SetActive(false);
         topicsContainer.SetActive(true);
         subtopicsPanel.SetActive(false);
-        ClearChildren(topicsContent);
+        videoScreenPanel.SetActive(false);
 
         headerText.text = subj.name;
-        currentSubject = subj;
-
+        ClearChildren(topicsContent);
         foreach (var topic in subj.topics)
         {
-            var btnGO = Instantiate(topicButtonPrefab, topicsContent);
-            var btn = btnGO.GetComponent<Button>();
-            btnGO.GetComponentInChildren<TMP_Text>().text = topic.name;
-
+            var btn = Instantiate(topicButtonPrefab, topicsContent).GetComponent<Button>();
+            btn.GetComponentInChildren<TMP_Text>().text = topic.name;
             var t = topic;
-            btn.onClick.RemoveAllListeners();
-            btn.onClick.AddListener(() => ShowSubtopics(t));
+            btn.onClick.AddListener(() => ShowSubtopicsList(t));
         }
     }
 
-    void ShowSubtopics(CoursesData.Topic topic)
+    void ShowSubtopicsList(CoursesData.Topic topic)
     {
+        currentTopic = topic;
         topicsContainer.SetActive(false);
         subtopicsPanel.SetActive(true);
+        videoScreenPanel.SetActive(false);
+
         ClearChildren(subtopicsContent);
-
-        subtopicsHeaderText.text = topic.name;
-
         foreach (var sub in topic.subtopics)
         {
-            var btnGO = Instantiate(subtopicButtonPrefab, subtopicsContent);
-            var btn = btnGO.GetComponent<Button>();
-            btnGO.GetComponentInChildren<TMP_Text>().text = sub.name;
-
-            btn.onClick.RemoveAllListeners();
+            var btn = Instantiate(subtopicButtonPrefab, subtopicsContent).GetComponent<Button>();
+            btn.GetComponentInChildren<TMP_Text>().text = sub.name;
+            var s = sub;
             btn.onClick.AddListener(() =>
             {
-                Debug.Log($"Subtopic selected: {sub.name}");
-                // TODO: загрузка видео или мини-теста по подтеме
+                currentSubtopic = s;
+                videoScreenPanel.SetActive(true);
+                videoStreamPlayer.SetVideoURL(s.videoURL);
             });
         }
     }
 
-    void BackToTopics()
+    void ShowTopicsList()
     {
         subtopicsPanel.SetActive(false);
         topicsContainer.SetActive(true);
+        videoScreenPanel.SetActive(false);
     }
 
-    public void BackToSubjects()
+    void OnTestButtonPressed()
     {
-        ShowSubjects();
+        if (testController == null)
+        {
+            Debug.LogError("TestController не назначен в Inspector!");
+            return;
+        }
+        // Скрываем видео‑панель
+        videoScreenPanel.SetActive(false);
+        // Активируем панель теста
+        testController.gameObject.SetActive(true);
+        // Запускаем тест для выбранной подтемы
+        testController.StartTest(currentSubject, currentTopic, currentSubtopic);
+        testController.StartButtonPressed();
     }
 
     void ClearChildren(Transform parent)
     {
-        foreach (Transform child in parent)
-            Destroy(child.gameObject);
+        for (int i = parent.childCount - 1; i >= 0; i--)
+            Destroy(parent.GetChild(i).gameObject);
     }
 }

@@ -7,6 +7,7 @@ public class CoursesData : ScriptableObject
     public class Subtopic
     {
         public string name;
+        public string videoURL;
     }
 
     [System.Serializable]

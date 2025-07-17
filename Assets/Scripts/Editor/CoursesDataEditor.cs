@@ -1,3 +1,4 @@
+
 // Assets/Editor/CoursesDataEditor.cs
 using UnityEngine;
 using UnityEditor;
@@ -16,14 +17,14 @@ public class CoursesDataEditor : Editor
     void OnEnable()
     {
         var subjectsProp = serializedObject.FindProperty("subjects");
-        subjectsList = new ReorderableList(serializedObject, subjectsProp,
-            true, true, true, true);
+        subjectsList = new ReorderableList(serializedObject, subjectsProp, true, true, true, true);
 
         subjectsList.drawHeaderCallback = rect =>
             EditorGUI.LabelField(rect, "Subjects");
 
         subjectsList.elementHeightCallback = index =>
         {
+            // Base height for subject line
             float height = EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
             bool expandedSubject = subjectFoldouts.ContainsKey(index) && subjectFoldouts[index];
             if (!expandedSubject)
@@ -90,12 +91,17 @@ public class CoursesDataEditor : Editor
                     {
                         sList = new ReorderableList(serializedObject, subsProp, true, true, true, true);
                         sList.drawHeaderCallback = rr => EditorGUI.LabelField(rr, "Subtopics");
-                        sList.elementHeightCallback = j => EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
+                        sList.elementHeightCallback = j => (EditorGUIUtility.singleLineHeight * 2) + EditorGUIUtility.standardVerticalSpacing * 2;
                         sList.drawElementCallback = (rr, j, a3, f3) =>
                         {
                             var subEl = subsProp.GetArrayElementAtIndex(j);
-                            rr.height = EditorGUIUtility.singleLineHeight;
-                            EditorGUI.PropertyField(rr, subEl.FindPropertyRelative("name"), GUIContent.none);
+                            // Draw name field
+                            var rName = new Rect(rr.x, rr.y, rr.width, EditorGUIUtility.singleLineHeight);
+                            EditorGUI.PropertyField(rName, subEl.FindPropertyRelative("name"), new GUIContent("Name"));
+                            // Draw URL field below
+                            var rURL = new Rect(rr.x, rr.y + EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing,
+                                                rr.width, EditorGUIUtility.singleLineHeight);
+                            EditorGUI.PropertyField(rURL, subEl.FindPropertyRelative("videoURL"), new GUIContent("Video URL"));
                         };
                         sList.onAddCallback = ll =>
                         {
@@ -103,6 +109,7 @@ public class CoursesDataEditor : Editor
                             serializedObject.ApplyModifiedProperties();
                             var newSub = subsProp.GetArrayElementAtIndex(subsProp.arraySize - 1);
                             newSub.FindPropertyRelative("name").stringValue = string.Empty;
+                            newSub.FindPropertyRelative("videoURL").stringValue = string.Empty;
                             serializedObject.ApplyModifiedProperties();
                         };
                         subtopicLists[subKey] = sList;
