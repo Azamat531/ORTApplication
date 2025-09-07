@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "543098181055",
+    "project_id": "first-5b828",
+    "storage_bucket": "first-5b828.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:543098181055:android:eb14176f1f3f12e6aabd0a",
+        "android_client_info": {
+          "package_name": "com.synak.academy.ort"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDXtzkCHr_BSsqYRRIILod2AGJBY3iz7LY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,29 +1,29 @@
-
+// ============================================
+// File: Assets/Scripts/Models.cs
+// Minimal DTOs to match final JSON (subjects/topics/subtopics)
+// Final subtopics.json uses: { id: string, title: string, answers: ["А","Б", ...] }
+// ============================================
 using System;
 using System.Collections.Generic;
 
-[Serializable] public class SubjectData { public string id; public string name; }
-[Serializable] public class TopicData { public string id; public string name; }
-
-// Вопрос: одна картинка + правильный ответ буквой ("А","Б","В","Г","Д")
 [Serializable]
-public class QuestionMin
+public class SubjectData
 {
-    public string imageUrl;
-    public string correctAnswer;
+    public string id;
+    public string name;
 }
 
-// Подтема: видео + список минимальных вопросов
 [Serializable]
-public class SubtopicData
+public class TopicData
 {
-    public int id;
-    public string title;
-    public string videoURL;
-    public List<QuestionMin> questions;
+    public string id;
+    public string name;
 }
 
-// Обёртки (если вдруг какой-то JSON будет завернут объектом)
-[Serializable] public class SubjectsArrayWrapper { public List<SubjectData> subjects; }
-[Serializable] public class TopicsArrayWrapper { public List<TopicData> topics; }
-[Serializable] public class SubtopicsWrapper { public List<SubtopicData> subtopics; }
+[Serializable]
+public class SubtopicIndex
+{
+    public string id;                 // строковый id ("1", "2", ...)
+    public string title;              // "Подтема 1"
+    public List<string> answers;      // ["Д","В","Б"]
+}

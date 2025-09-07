@@ -15,11 +15,11 @@
 
 //    public void Setup(string text, Sprite sprite, List<string> options)
 //    {
-//        // 1) Заголовок
+//        // Заголовок
 //        if (headerText != null)
-//            headerText.text = text;
+//            headerText.text = text ?? string.Empty;
 
-//        // 2) Картинка
+//        // Картинка с автоподгонкой по ширине
 //        if (sprite != null && questionImage != null)
 //        {
 //            questionImage.sprite = sprite;
@@ -35,49 +35,38 @@
 //            );
 //        }
 
-//        // 3) Подготовка ToggleGroup
 //        if (answersContainer == null)
 //        {
 //            Debug.LogError("QuestionEntry: Answers Container не назначен!", this);
 //            return;
 //        }
-//        toggleGroup = answersContainer.GetComponent<ToggleGroup>();
-//        if (toggleGroup == null)
-//            toggleGroup = answersContainer.gameObject.AddComponent<ToggleGroup>();
 
-//        // Позволяем начать с пустой группы
+//        // ToggleGroup (разрешаем начать без выбора)
+//        toggleGroup = answersContainer.GetComponent<ToggleGroup>()
+//                    ?? answersContainer.gameObject.AddComponent<ToggleGroup>();
 //        toggleGroup.allowSwitchOff = true;
 
-//        // 4) Очищаем старые варианты
+//        // Чистим старые варианты
 //        foreach (Transform c in answersContainer)
 //            Destroy(c.gameObject);
 
-//        // 5) Генерируем новые Toggle
-//        for (int i = 0; i < options.Count && i < labels.Length; i++)
+//        // Создаём 5 ответов. Подписи — только буква (А, Б, В, Г, Д)
+//        for (int i = 0; i < labels.Length; i++)
 //        {
 //            var togGO = Instantiate(answerTogglePrefab, answersContainer);
 //            var tog = togGO.GetComponent<Toggle>();
 //            var lbl = togGO.GetComponentInChildren<TextMeshProUGUI>();
 
 //            if (lbl != null)
-//                lbl.text = $"{labels[i]}. {options[i]}";
+//                lbl.text = labels[i]; // без дублирования "А. А"
 
 //            if (tog != null)
 //            {
-//                // Ни один не выбран по умолчанию
-//                tog.isOn = false;
-//                // Встраиваем в группу
 //                tog.group = toggleGroup;
-//                // Как только юзер выберет этот Toggle — запретим полный сброс
-//                tog.onValueChanged.AddListener(isOn =>
-//                {
-//                    if (isOn)
-//                        toggleGroup.allowSwitchOff = false;
-//                });
+//                tog.isOn = false;
 //            }
 //        }
 
-//        // 6) Сбрасываем все отметки (чтобы ничего не было выбрано)
 //        toggleGroup.SetAllTogglesOff();
 //    }
 //}
@@ -89,70 +78,98 @@ using UnityEngine.UI;
 
 public class QuestionEntry : MonoBehaviour
 {
-    [SerializeField] private TextMeshProUGUI headerText;
-    [SerializeField] private Image questionImage;
-    [SerializeField] private Transform answersContainer;
-    [SerializeField] private GameObject answerTogglePrefab;
+    [Header("UI")]
+    public Image questionImage;          // картинка вопроса
+    public Transform optionsRoot;        // контейнер с вариантами (Toggle'и)
+    public ToggleGroup toggleGroup;      // можно оставить пустым — создадим сами
 
-    private ToggleGroup toggleGroup;
-    private readonly string[] labels = { "А", "Б", "В", "Г", "Д" };
+    [Header("Colors")]
+    public Color normalColor = new Color(0.92f, 0.92f, 0.92f, 1f);
+    public Color correctColor = new Color(0.16f, 0.64f, 0.24f, 1f);
+    public Color wrongColor = new Color(0.85f, 0.15f, 0.15f, 1f);
 
-    public void Setup(string text, Sprite sprite, List<string> options)
+    private readonly List<Toggle> _toggles = new List<Toggle>();
+
+    /// <summary>Подготовка карточки: картинка + подписи вариантов.</summary>
+    public void Setup(string questionTextUnused, Sprite sprite, List<string> optionLabels)
     {
-        // 1) Устанавливаем текст вопроса
-        if (headerText != null)
-            headerText.text = text;
+        if (questionImage) questionImage.sprite = sprite;
 
-        // 2) Подгон картинки
-        if (sprite != null && questionImage != null)
+        CollectToggles();
+
+        // если нужно — подпишем варианты (ищем TMP_Text у Toggle)
+        if (optionLabels != null && optionLabels.Count > 0)
         {
-            questionImage.sprite = sprite;
-            var rt = questionImage.rectTransform;
-            rt.anchorMin = new Vector2(0, 1);
-            rt.anchorMax = new Vector2(1, 1);
-            rt.pivot = new Vector2(0.5f, 1);
-            rt.anchoredPosition = Vector2.zero;
-            float pw = (rt.parent as RectTransform).rect.width;
-            rt.SetSizeWithCurrentAnchors(
-                RectTransform.Axis.Vertical,
-                pw * (sprite.rect.height / sprite.rect.width)
-            );
-        }
-
-        // 3) Инициализируем ToggleGroup
-        if (answersContainer == null)
-        {
-            Debug.LogError("QuestionEntry: Answers Container не назначен!", this);
-            return;
-        }
-        toggleGroup = answersContainer.GetComponent<ToggleGroup>()
-                    ?? answersContainer.gameObject.AddComponent<ToggleGroup>();
-
-        // Включаем allowSwitchOff, чтобы можно было снять выбор полностью
-        toggleGroup.allowSwitchOff = true;
-
-        // 4) Убираем старые варианты
-        foreach (Transform c in answersContainer)
-            Destroy(c.gameObject);
-
-        // 5) Создаём новые Toggle'ы
-        for (int i = 0; i < options.Count && i < labels.Length; i++)
-        {
-            var togGO = Instantiate(answerTogglePrefab, answersContainer);
-            var tog = togGO.GetComponent<Toggle>();
-            var lbl = togGO.GetComponentInChildren<TextMeshProUGUI>();
-
-            if (lbl != null)
-                lbl.text = $"{labels[i]}. {options[i]}";
-
-            if (tog != null)
+            for (int i = 0; i < _toggles.Count && i < optionLabels.Count; i++)
             {
-                tog.group = toggleGroup;
-                tog.isOn = false;  // гарантируем, что по умолчанию всё выключено
+                var txt = _toggles[i].GetComponentInChildren<TMP_Text>();
+                if (txt) txt.text = optionLabels[i];
             }
         }
 
-        // 6) Ещё раз сбросим все, на всякий случай
-        toggleGroup.SetAllTogglesOff();
+        // сброс выбора и цветов
+        foreach (var t in _toggles)
+        {
+            t.isOn = false;
+            SetToggleColor(t, normalColor);
+            t.interactable = true;
+        }
+    }
+
+    /// <summary>Индекс выбранного варианта (0..N-1), либо -1 если ничего не выбрано.</summary>
+    public int GetPickedIndex()
+    {
+        for (int i = 0; i < _toggles.Count; i++)
+            if (_toggles[i].isOn) return i;
+        return -1;
+    }
+
+    /// <summary>Подсветить результат: правильный зелёный, ошибочный красный; заблокировать выбор.</summary>
+    public void ShowResult(int correctIndex, int pickedIndex)
+    {
+        for (int i = 0; i < _toggles.Count; i++)
+        {
+            var t = _toggles[i];
+
+            if (i == correctIndex) SetToggleColor(t, correctColor);
+            else if (i == pickedIndex) SetToggleColor(t, wrongColor);
+            else SetToggleColor(t, normalColor);
+
+            t.interactable = false;       // блокируем после проверки
+        }
+    }
+
+    // ---------- helpers ----------
+    private void CollectToggles()
+    {
+        _toggles.Clear();
+
+        if (!optionsRoot) optionsRoot = transform; // ищем в детях по умолчанию
+
+        var found = optionsRoot.GetComponentsInChildren<Toggle>(true);
+        _toggles.AddRange(found);
+
+        // если у контейнера нет ToggleGroup — создадим, чтобы варианты были взаимоисключающими
+        if (!_toggles.TrueForAll(t => t.group != null))
+        {
+            if (!toggleGroup)
+            {
+                toggleGroup = optionsRoot.GetComponent<ToggleGroup>();
+                if (!toggleGroup) toggleGroup = optionsRoot.gameObject.AddComponent<ToggleGroup>();
+                toggleGroup.allowSwitchOff = true;
+            }
+            foreach (var t in _toggles) t.group = toggleGroup;
+        }
+    }
+
+    private static void SetToggleColor(Toggle t, Color c)
+    {
+        // пробуем покрасить фон варианта (targetGraphic) или ближайший Image
+        if (t.targetGraphic is Image img) img.color = c;
+        else
+        {
+            var img2 = t.GetComponent<Image>();
+            if (img2) img2.color = c;
+        }
     }
 }
