@@ -1,15 +1,8 @@
-//// ============================================
-//// CacheService.cs — minimal patch over your ORIGINAL
-//// Что добавлено/изменено:
-//// 1) Картинки/видео: кандидаты формируются ДО query (расширение вставляется перед ?alt=media)
-//// 2) Текст/картинки: кэш-ключи стабильные (исп. CachePath(hash+ext)) — как и было у тебя
-//// 3) Sprite-совместимые перегрузки сохранены (GetTexture(...), в т.ч. с maxSize)
-//// Других изменений API НЕТ.
-//// ============================================
-//using System;
+п»ї//using System;
 //using System.IO;
 //using System.Text;
 //using System.Collections;
+//using System.Collections.Generic;
 //using System.Security.Cryptography;
 //using UnityEngine;
 //using UnityEngine.Networking;
@@ -17,149 +10,454 @@
 //public static class CacheService
 //{
 //    private static readonly string CacheDir = Path.Combine(Application.persistentDataPath, "cache");
+//    private static readonly string TempDir = Path.Combine(Application.persistentDataPath, "cache_tmp");
 
-//    public static IEnumerator GetText(string url, string cacheKey, System.Action<string> onDone, System.Action<string> onError = null)
+//    // ========= РўР•РљРЎРў (JSON) РЎ РџР РћР’Р•Р РљРћР™ Р’Р•Р РЎРР =========
+//    public static IEnumerator GetText(string url, string cacheKey, Action<string> onDone, Action<string> onError = null)
 //    {
-//        EnsureCacheDir();
-//        string path = CachePath(cacheKey, ".json");
-//        if (File.Exists(path))
+//        EnsureDirs();
+//        string encPath = CachePathEnc(cacheKey, ".json");
+
+//        string cachedJson = null;
+
+//        // 1) Р•СЃР»Рё РµСЃС‚СЊ РєСЌС€ в†’ СЃСЂР°Р·Сѓ РѕС‚РґР°С‘Рј
+//        if (File.Exists(encPath))
 //        {
-//            string cached = File.ReadAllText(path, Encoding.UTF8);
-//            onDone?.Invoke(cached);
-//#if !UNITY_EDITOR
-//            if (Application.internetReachability == NetworkReachability.NotReachable) yield break;
-//#endif
-//            using (var req = UnityWebRequest.Get(url))
+//            try
 //            {
-//                yield return req.SendWebRequest();
-//#if UNITY_2020_2_OR_NEWER
-//                if (req.result == UnityWebRequest.Result.Success)
-//#else
-//                if (!req.isNetworkError && !req.isHttpError)
-//#endif
-//                { var fresh = req.downloadHandler.text; if (!string.Equals(fresh, cached, StringComparison.Ordinal)) try { File.WriteAllText(path, fresh, Encoding.UTF8); } catch { } }
+//                string tmp = DecryptToTemp(encPath, ".json");
+//                cachedJson = File.ReadAllText(tmp, Encoding.UTF8);
+//                onDone?.Invoke(cachedJson);
 //            }
-//            yield break;
+//            catch (Exception e) { Debug.LogWarning("[CacheService] РћС€РёР±РєР° С‡С‚РµРЅРёСЏ РєСЌС€Р°: " + e.Message); }
 //        }
+
+//        // 2) РћРЅР»Р°Р№РЅ-РїСЂРѕРІРµСЂРєР° РІРµСЂСЃРёРё
 //        using (var req = UnityWebRequest.Get(url))
 //        {
 //            yield return req.SendWebRequest();
-//#if UNITY_2020_2_OR_NEWER
-//            if (req.result != UnityWebRequest.Result.Success)
-//#else
-//            if (req.isNetworkError || req.isHttpError)
-//#endif
-//            { onError?.Invoke(req.error); yield break; }
-//            try { File.WriteAllText(path, req.downloadHandler.text, Encoding.UTF8); } catch { }
-//            onDone?.Invoke(req.downloadHandler.text);
-//        }
-//    }
-
-//    public static IEnumerator GetTexture(string url, string cacheKey, System.Action<Sprite> onDone, System.Action<string> onError = null)
-//        => GetTexture_Internal(url, cacheKey, onDone, 0, onError);
-
-//    public static IEnumerator GetTexture(string url, string cacheKey, System.Action<Sprite> onDone, int maxSize, System.Action<string> onError = null)
-//        => GetTexture_Internal(url, cacheKey, onDone, maxSize, onError);
-
-//    public static IEnumerator GetTextureToCache(string url, string cacheKey, System.Action<Texture2D> onDone, System.Action<string> onError = null)
-//    {
-//        EnsureCacheDir();
-//        string path = CachePath(cacheKey, ".png");
-//        if (File.Exists(path))
-//        { try { var t = new Texture2D(2, 2, TextureFormat.RGBA32, false); t.LoadImage(File.ReadAllBytes(path)); onDone?.Invoke(t); yield break; } catch { } }
-//        foreach (var candidate in TextureCandidates(url))
-//        {
-//            using (var req = UnityWebRequestTexture.GetTexture(candidate))
+//            if (!RequestSucceeded(req))
 //            {
-//                yield return req.SendWebRequest();
-//#if UNITY_2020_2_OR_NEWER
-//                if (req.result != UnityWebRequest.Result.Success)
-//#else
-//                if (req.isNetworkError || req.isHttpError)
-//#endif
-//                { continue; }
-//                try { var tex = DownloadHandlerTexture.GetContent(req); File.WriteAllBytes(path, tex.EncodeToPNG()); onDone?.Invoke(tex); yield break; } catch { }
+//                if (cachedJson == null) onError?.Invoke(req.error);
+//                yield break;
+//            }
+
+//            string freshJson = req.downloadHandler.text;
+
+//            bool needUpdate = false;
+//            try
+//            {
+//                int cachedVer = ExtractVersion(cachedJson);
+//                int freshVer = ExtractVersion(freshJson);
+//                if (freshVer > cachedVer) needUpdate = true;
+//            }
+//            catch
+//            {
+//                // РµСЃР»Рё РЅРµС‚ РїРѕР»СЏ version в†’ СЃСЂР°РІРЅРёРІР°РµРј С‚РµРєСЃС‚
+//                if (cachedJson != freshJson) needUpdate = true;
+//            }
+
+//            if (needUpdate)
+//            {
+//                try
+//                {
+//                    var bytes = Encoding.UTF8.GetBytes(freshJson);
+//                    File.WriteAllBytes(encPath, EncryptBytes(bytes));
+//                    string tmp = DecryptToTemp(encPath, ".json");
+//                    string updated = File.ReadAllText(tmp, Encoding.UTF8);
+//                    onDone?.Invoke(updated);
+//                    Debug.Log("[CacheService] РћР±РЅРѕРІРёР» JSON РїРѕ РІРµСЂСЃРёРё: " + cacheKey);
+//                }
+//                catch (Exception e) { onError?.Invoke(e.Message); }
 //            }
 //        }
-//        onError?.Invoke("image not found");
 //    }
 
-//    private static IEnumerator GetTexture_Internal(string url, string cacheKey, System.Action<Sprite> onDone, int maxSize, System.Action<string> onError)
+//    private static int ExtractVersion(string json)
 //    {
-//        EnsureCacheDir();
-//        string path = CachePath(cacheKey, ".png");
-//        if (File.Exists(path))
-//        { var sp = LoadSprite(path); if (sp != null) { onDone?.Invoke(sp); yield break; } }
-//        foreach (var candidate in TextureCandidates(url))
+//        if (string.IsNullOrEmpty(json)) return 0;
+//        if (json.Contains("\"version\""))
 //        {
-//            using (var req = UnityWebRequestTexture.GetTexture(candidate))
+//            int i = json.IndexOf("\"version\"");
+//            if (i >= 0)
 //            {
-//                yield return req.SendWebRequest();
-//#if UNITY_2020_2_OR_NEWER
-//                if (req.result != UnityWebRequest.Result.Success)
-//#else
-//                if (req.isNetworkError || req.isHttpError)
-//#endif
-//                { continue; }
-//                try { var tex = DownloadHandlerTexture.GetContent(req); if (maxSize > 0) tex = ResizeIfNeeded(tex, maxSize); File.WriteAllBytes(path, tex.EncodeToPNG()); var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f); onDone?.Invoke(sp); yield break; } catch { }
+//                int c = json.IndexOf(':', i);
+//                if (c > 0)
+//                {
+//                    string sub = json.Substring(c + 1);
+//                    string num = "";
+//                    foreach (char ch in sub)
+//                    {
+//                        if (char.IsDigit(ch)) num += ch;
+//                        else if (num.Length > 0) break;
+//                    }
+//                    if (int.TryParse(num, out int v)) return v;
+//                }
 //            }
 //        }
-//        onError?.Invoke("image not found");
+//        return 0;
 //    }
 
-//    public static IEnumerator GetFile(string url, string cacheKey, System.Action<string> onDone, string forcedExt = null, System.Action<string> onError = null)
+//    // ========= РљРђР РўРРќРљР =========
+//    public static IEnumerator GetTexture(string urlNoExt, string cacheKey, Action<Texture2D> onDone, Action<string> onError = null)
+//        => GetTexture_Internal(urlNoExt, cacheKey, onDone, 0, onError);
+
+//    public static IEnumerator GetTexture(string urlNoExt, string cacheKey, Action<Sprite> onDone, int maxSize, Action<string> onError = null)
 //    {
-//        EnsureCacheDir();
+//        Texture2D tex = null;
+//        yield return GetTexture_Internal(urlNoExt, cacheKey, t => tex = t, maxSize, onError);
+//        if (tex != null)
+//        {
+//            var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+//            onDone?.Invoke(sp);
+//        }
+//    }
+
+//    public static IEnumerator GetTextureToCache(string urlNoExt, string cacheKey, Action<bool> onDone, int maxSide = 0, Action<string> onError = null)
+//    {
+//        EnsureDirs();
+//        string encPath = CachePathEnc(cacheKey, ".png");
+//        if (File.Exists(encPath)) { onDone?.Invoke(true); yield break; }
+
+//        foreach (var cand in TextureCandidates(urlNoExt))
+//        {
+//            using (var req = UnityWebRequestTexture.GetTexture(cand, false))
+//            {
+//                yield return req.SendWebRequest();
+//                if (!RequestSucceeded(req)) continue;
+
+//                try
+//                {
+//                    var tex = DownloadHandlerTexture.GetContent(req);
+//                    if (maxSide > 0) tex = ResizeIfNeeded(tex, maxSide);
+
+//                    var png = tex.EncodeToPNG();
+//                    File.WriteAllBytes(encPath, EncryptBytes(png));
+//                    onDone?.Invoke(true);
+//                    yield break;
+//                }
+//                catch (Exception e)
+//                {
+//                    onError?.Invoke(e.Message);
+//                    onDone?.Invoke(false);
+//                    yield break;
+//                }
+//            }
+//        }
+//        onDone?.Invoke(false);
+//        onError?.Invoke("Texture not found with tried extensions");
+//    }
+
+//    private static IEnumerator GetTexture_Internal(string urlNoExt, string cacheKey, Action<Texture2D> onDone, int maxSize, Action<string> onError)
+//    {
+//        EnsureDirs();
+//        string encPath = CachePathEnc(cacheKey, ".png");
+
+//        if (File.Exists(encPath))
+//        {
+//            try
+//            {
+//                string tmp = DecryptToTemp(encPath, ".png");
+//                var bytes = File.ReadAllBytes(tmp);
+//                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+//                tex.LoadImage(bytes, true);
+//                if (maxSize > 0) tex = ResizeIfNeeded(tex, maxSize);
+//                onDone?.Invoke(tex);
+//            }
+//            catch (Exception e) { onError?.Invoke(e.Message); }
+//            yield break;
+//        }
+
+//        foreach (var cand in TextureCandidates(urlNoExt))
+//        {
+//            using (var req = UnityWebRequestTexture.GetTexture(cand, false))
+//            {
+//                yield return req.SendWebRequest();
+//                if (!RequestSucceeded(req)) continue;
+
+//                try
+//                {
+//                    var tex = DownloadHandlerTexture.GetContent(req);
+//                    if (maxSize > 0) tex = ResizeIfNeeded(tex, maxSize);
+
+//                    var png = tex.EncodeToPNG();
+//                    File.WriteAllBytes(encPath, EncryptBytes(png));
+//                    onDone?.Invoke(tex);
+//                    yield break;
+//                }
+//                catch (Exception e) { onError?.Invoke(e.Message); yield break; }
+//            }
+//        }
+
+//        onError?.Invoke("Texture not found with tried extensions");
+//    }
+
+//    // ========= Р¤РђР™Р›Р« (РІРёРґРµРѕ Рё С‚.Рї.) =========
+//    public static IEnumerator GetFile(
+//        string url,
+//        string cacheKey,
+//        Action<string> onDone,
+//        string forcedExt = null,
+//        Action<string> onError = null,
+//        Action<float> onProgress = null
+//    )
+//    {
+//        EnsureDirs();
 //        string ext = forcedExt ?? GuessExt(url, ".bin");
-//        string path = CachePath(cacheKey, ext);
-//        if (File.Exists(path)) { onDone?.Invoke(path); yield break; }
-//        foreach (var candidate in FileCandidates(url))
+//        string encPath = CachePathEnc(cacheKey, ext);
+
+//        if (File.Exists(encPath))
 //        {
-//            string temp = path + ".tmp";
-//            using (var req = UnityWebRequest.Get(candidate))
+//            string tmp = GetOrMakePlainTemp(encPath, ext);
+//            onProgress?.Invoke(1f);
+//            onDone?.Invoke(tmp);
+//            yield break;
+//        }
+
+//        string tmpDownload = Path.Combine(TempDir, Guid.NewGuid().ToString("N") + NormalizeExt(ext));
+//        using (var req = UnityWebRequest.Get(MaybeWithExt(url, ext)))
+//        {
+//            req.downloadHandler = new DownloadHandlerFile(tmpDownload) { removeFileOnAbort = true };
+//            var op = req.SendWebRequest();
+//            while (!op.isDone)
 //            {
-//                req.downloadHandler = new DownloadHandlerFile(temp) { removeFileOnAbort = true }; yield return req.SendWebRequest();
-//#if UNITY_2020_2_OR_NEWER
-//                if (req.result != UnityWebRequest.Result.Success)
-//#else
-//                if (req.isNetworkError || req.isHttpError)
-//#endif
-//                { try { if (File.Exists(temp)) File.Delete(temp); } catch { } continue; }
-//                try { if (File.Exists(path)) File.Delete(path); File.Move(temp, path); onDone?.Invoke(path); yield break; } catch { }
+//                onProgress?.Invoke(Mathf.Clamp01(req.downloadProgress));
+//                yield return null;
+//            }
+//            if (!RequestSucceeded(req))
+//            {
+//                try { if (File.Exists(tmpDownload)) File.Delete(tmpDownload); } catch { }
+//                onError?.Invoke(req.error);
+//                yield break;
 //            }
 //        }
-//        onError?.Invoke("file download failed");
+
+//        try
+//        {
+//            byte[] data = File.ReadAllBytes(tmpDownload);
+//            File.WriteAllBytes(encPath, EncryptBytes(data));
+//            onProgress?.Invoke(1f);
+//            onDone?.Invoke(tmpDownload);
+//        }
+//        catch (Exception e)
+//        {
+//            try { if (File.Exists(tmpDownload)) File.Delete(tmpDownload); } catch { }
+//            onError?.Invoke(e.Message);
+//        }
 //    }
 
 //    public static string GetCachedPath(string cacheKey, string ext)
-//    { EnsureCacheDir(); string path = CachePath(cacheKey, ext); return File.Exists(path) ? path : null; }
+//    {
+//        string p = CachePathEnc(cacheKey, ext);
+//        return File.Exists(p) ? p : null;
+//    }
 
-//    // ---- helpers ----
-//    private static void EnsureCacheDir() { try { if (!Directory.Exists(CacheDir)) Directory.CreateDirectory(CacheDir); } catch { } }
+//    public static string GetOrMakePlainTemp(string encPath, string ext, bool overwriteIfExists = false)
+//    {
+//        EnsureDirs();
+//        try
+//        {
+//            string name = Path.GetFileNameWithoutExtension(encPath);
+//            string tmp = Path.Combine(TempDir, name + NormalizeExt(ext));
+//            if (File.Exists(tmp) && !overwriteIfExists) return tmp;
 
-//    private static string CachePath(string key, string ext)
-//    { ext = GuessExt(ext, ".bin"); string hash = Hash((key ?? "").ToLowerInvariant()); return Path.Combine(CacheDir, hash + ext); }
+//            byte[] enc = File.ReadAllBytes(encPath);
+//            byte[] plain = DecryptBytes(enc);
+//            if (File.Exists(tmp) && overwriteIfExists) File.Delete(tmp);
+//            File.WriteAllBytes(tmp, plain);
+//            return tmp;
+//        }
+//        catch { return null; }
+//    }
 
-//    private static string Hash(string s)
-//    { using (var md5 = MD5.Create()) { var data = Encoding.UTF8.GetBytes(s); var hash = md5.ComputeHash(data); var sb = new StringBuilder(hash.Length * 2); foreach (var b in hash) sb.Append(b.ToString("x2")); return sb.ToString(); } }
+//    public static int CleanupTemp(int maxAgeHours = 24)
+//    {
+//        try
+//        {
+//            EnsureDirs();
+//            var now = DateTime.UtcNow;
+//            int removed = 0;
+//            var di = new DirectoryInfo(TempDir);
+//            if (!di.Exists) return 0;
+//            foreach (var fi in di.GetFiles())
+//            {
+//                var age = now - fi.LastWriteTimeUtc;
+//                if (age.TotalHours > maxAgeHours) { try { fi.Delete(); removed++; } catch { } }
+//            }
+//            return removed;
+//        }
+//        catch { return 0; }
+//    }
 
-//    private static string GuessExt(string urlOrExt, string fallback)
-//    { if (string.IsNullOrEmpty(urlOrExt)) return fallback; int q = urlOrExt.IndexOf('?'); string baseUrl = q >= 0 ? urlOrExt.Substring(0, q) : urlOrExt; string ext = Path.GetExtension(baseUrl); if (string.IsNullOrEmpty(ext)) return fallback; if (!ext.StartsWith(".")) ext = "." + ext; return ext.ToLowerInvariant(); }
+//    public static int ClearAllEncrypted()
+//    {
+//        try
+//        {
+//            EnsureDirs();
+//            int removed = 0;
+//            var di = new DirectoryInfo(CacheDir);
+//            if (!di.Exists) return 0;
+//            foreach (var fi in di.GetFiles())
+//            {
+//                try { fi.Delete(); removed++; } catch { }
+//            }
+//            return removed;
+//        }
+//        catch { return 0; }
+//    }
 
-//    private static void SplitUrl(string url, out string baseUrl, out string query)
-//    { int q = url.IndexOf('?'); if (q >= 0) { baseUrl = url.Substring(0, q); query = url.Substring(q); } else { baseUrl = url; query = string.Empty; } }
+//    public static bool DeleteCached(string cacheKey, string ext)
+//    {
+//        try
+//        {
+//            EnsureDirs();
+//            string path = CachePathEnc(cacheKey, ext);
+//            if (File.Exists(path)) { File.Delete(path); return true; }
+//        }
+//        catch { }
+//        return false;
+//    }
 
-//    private static string[] TextureCandidates(string url)
-//    { SplitUrl(url, out string baseUrl, out string query); string ext = GuessExt(baseUrl, null); if (!string.IsNullOrEmpty(ext)) return new[] { url }; return new[] { baseUrl + query, baseUrl + ".png" + query, baseUrl + ".jpg" + query, baseUrl + ".jpeg" + query, baseUrl + ".webp" + query }; }
+//    public static void LogPersistentPath()
+//    {
+//        Debug.Log("[CacheService] persistentDataPath = " + Application.persistentDataPath +
+//                  "\ncache     = " + CacheDir +
+//                  "\ncache_tmp = " + TempDir);
+//    }
 
-//    private static string[] FileCandidates(string url)
-//    { SplitUrl(url, out string baseUrl, out string query); string ext = GuessExt(baseUrl, null); if (!string.IsNullOrEmpty(ext)) return new[] { url }; return new[] { baseUrl + ".mp4" + query, baseUrl + query }; }
+//    private static void EnsureDirs()
+//    {
+//        try { if (!Directory.Exists(CacheDir)) Directory.CreateDirectory(CacheDir); } catch { }
+//        try { if (!Directory.Exists(TempDir)) Directory.CreateDirectory(TempDir); } catch { }
+//    }
 
-//    private static Sprite LoadSprite(string path)
-//    { try { var bytes = File.ReadAllBytes(path); var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false); tex.LoadImage(bytes); return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f); } catch { return null; } }
+//    private static string CachePathEnc(string cacheKey, string ext)
+//    {
+//        string md5 = MD5Hex(cacheKey);
+//        return Path.Combine(CacheDir, md5 + NormalizeExt(ext) + ".enc");
+//    }
 
-//    private static Texture2D ResizeIfNeeded(Texture2D src, int max)
-//    { int w = src.width, h = src.height; int m = Mathf.Max(w, h); if (max <= 0 || m <= max) return src; float k = (float)max / m; int nw = Mathf.RoundToInt(w * k), nh = Mathf.RoundToInt(h * k); var rt = new RenderTexture(nw, nh, 0, RenderTextureFormat.ARGB32); Graphics.Blit(src, rt); var prev = RenderTexture.active; RenderTexture.active = rt; var tex = new Texture2D(nw, nh, TextureFormat.RGBA32, false); tex.ReadPixels(new Rect(0, 0, nw, nh), 0, 0); tex.Apply(); RenderTexture.active = prev; rt.Release(); return tex; }
+//    private static string NormalizeExt(string ext) => string.IsNullOrEmpty(ext) ? "" : (ext.StartsWith(".") ? ext : "." + ext);
+
+//    private static string GuessExt(string url, string fallback)
+//    {
+//        try
+//        {
+//            int q = url.IndexOf('?');
+//            string baseUrl = (q >= 0) ? url.Substring(0, q) : url;
+//            string e = Path.GetExtension(baseUrl);
+//            return string.IsNullOrEmpty(e) ? fallback : e;
+//        }
+//        catch { return fallback; }
+//    }
+
+//    private static string MaybeWithExt(string url, string ext)
+//    {
+//        if (url.StartsWith("file:")) return url;
+//        int q = url.IndexOf('?');
+//        string baseUrl = (q >= 0) ? url.Substring(0, q) : url;
+//        string query = (q >= 0) ? url.Substring(q) : "";
+//        string e = Path.GetExtension(baseUrl);
+//        if (string.IsNullOrEmpty(e)) return baseUrl + NormalizeExt(ext) + query;
+//        return url;
+//    }
+
+//    private static IEnumerable<string> TextureCandidates(string urlNoExt)
+//    {
+//        string[] exts = { "", ".png", ".jpg", ".jpeg", ".webp" };
+//        foreach (var e in exts)
+//        {
+//            int q = urlNoExt.IndexOf('?');
+//            string baseUrl = (q >= 0) ? urlNoExt.Substring(0, q) : urlNoExt;
+//            string query = (q >= 0) ? urlNoExt.Substring(q) : "";
+//            yield return string.IsNullOrEmpty(e) ? urlNoExt : (baseUrl + e + query);
+//        }
+//    }
+
+//    private static Texture2D ResizeIfNeeded(Texture2D src, int maxSide)
+//    {
+//        if (src == null || maxSide <= 0) return src;
+//        int w = src.width, h = src.height;
+//        int m = Mathf.Max(w, h);
+//        if (m <= maxSide) return src;
+
+//        float k = (float)maxSide / m;
+//        int nw = Mathf.Max(1, Mathf.RoundToInt(w * k));
+//        int nh = Mathf.Max(1, Mathf.RoundToInt(h * k));
+
+//        var rt = RenderTexture.GetTemporary(nw, nh, 0, RenderTextureFormat.ARGB32);
+//        Graphics.Blit(src, rt);
+//        var prev = RenderTexture.active;
+//        RenderTexture.active = rt;
+
+//        var dst = new Texture2D(nw, nh, TextureFormat.RGBA32, false);
+//        dst.ReadPixels(new Rect(0, 0, nw, nh), 0, 0);
+//        dst.Apply(false, true);
+
+//        RenderTexture.active = prev;
+//        RenderTexture.ReleaseTemporary(rt);
+
+//        UnityEngine.Object.Destroy(src);
+//        return dst;
+//    }
+
+//    private static string MD5Hex(string s)
+//    {
+//        using var md5 = MD5.Create();
+//        var b = Encoding.UTF8.GetBytes(s);
+//        var h = md5.ComputeHash(b);
+//        var sb = new StringBuilder(h.Length * 2);
+//        foreach (var x in h) sb.Append(x.ToString("x2"));
+//        return sb.ToString();
+//    }
+
+//    private static readonly byte[] Key = new byte[16] { 0x23, 0x55, 0xA1, 0x0F, 0x9C, 0xDE, 0x01, 0x77, 0x33, 0x10, 0xB2, 0x5A, 0xC8, 0x19, 0x4D, 0xEE };
+//    private static readonly byte[] IV = new byte[16] { 0x10, 0x22, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x00 };
+
+//    private static byte[] EncryptBytes(byte[] plain)
+//    {
+//        using var aes = Aes.Create();
+//        aes.Key = Key; aes.IV = IV; aes.Padding = PaddingMode.PKCS7; aes.Mode = CipherMode.CBC;
+//        using var ms = new MemoryStream();
+//        using (var cs = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write))
+//            cs.Write(plain, 0, plain.Length);
+//        return ms.ToArray();
+//    }
+
+//    private static byte[] DecryptBytes(byte[] enc)
+//    {
+//        using var aes = Aes.Create();
+//        aes.Key = Key; aes.IV = IV; aes.Padding = PaddingMode.PKCS7; aes.Mode = CipherMode.CBC;
+//        using var ms = new MemoryStream(enc);
+//        using var cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read);
+//        using var outMs = new MemoryStream();
+//        cs.CopyTo(outMs);
+//        return outMs.ToArray();
+//    }
+
+//    private static string DecryptToTemp(string encPath, string ext)
+//    {
+//        string name = Path.GetFileNameWithoutExtension(encPath);
+//        string tmp = Path.Combine(TempDir, name + NormalizeExt(ext));
+//        try
+//        {
+//            if (File.Exists(tmp)) return tmp;
+//            var enc = File.ReadAllBytes(encPath);
+//            var plain = DecryptBytes(enc);
+//            File.WriteAllBytes(tmp, plain);
+//            return tmp;
+//        }
+//        catch { return null; }
+//    }
+
+//    private static bool RequestSucceeded(UnityWebRequest req)
+//    {
+//#if UNITY_2020_2_OR_NEWER
+//        return req.result == UnityWebRequest.Result.Success;
+//#else
+//        return !req.isNetworkError && !req.isHttpError;
+//#endif
+//    }
 //}
 
 
@@ -167,6 +465,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Collections;
+using System.Collections.Generic;
 using System.Security.Cryptography;
 using UnityEngine;
 using UnityEngine.Networking;
@@ -176,76 +475,104 @@ public static class CacheService
     private static readonly string CacheDir = Path.Combine(Application.persistentDataPath, "cache");
     private static readonly string TempDir = Path.Combine(Application.persistentDataPath, "cache_tmp");
 
-    // ---- Универсальная проверка успеха запроса (поддержка старых Unity) ----
-    private static bool RequestSucceeded(UnityWebRequest req)
-    {
-#if UNITY_2020_2_OR_NEWER
-        return req.result == UnityWebRequest.Result.Success;
-#else
-#pragma warning disable 0618
-        return !req.isNetworkError && !req.isHttpError;
-#pragma warning restore 0618
-#endif
-    }
-
-    // ===================== TEXT (JSON) =====================
+    // ========= РўР•РљРЎРў (JSON) РЎ РџР РћР’Р•Р РљРћР™ Р’Р•Р РЎРР =========
     public static IEnumerator GetText(string url, string cacheKey, Action<string> onDone, Action<string> onError = null)
     {
         EnsureDirs();
         string encPath = CachePathEnc(cacheKey, ".json");
 
-        // 1) Из кэша
+        string cachedJson = null;
+
+        // 1) Р•СЃР»Рё РµСЃС‚СЊ РєСЌС€ в†’ СЃСЂР°Р·Сѓ РѕС‚РґР°С‘Рј
         if (File.Exists(encPath))
         {
             try
             {
-                var plain = DecryptBytes(File.ReadAllBytes(encPath));
-                onDone?.Invoke(Encoding.UTF8.GetString(plain));
+                string tmp = DecryptToTemp(encPath, ".json");
+                cachedJson = File.ReadAllText(tmp, Encoding.UTF8);
+                onDone?.Invoke(cachedJson);
             }
-            catch { /* упадём в онлайн */ }
-
-            // 1a) Фоновое обновление (если есть интернет)
-            if (Application.internetReachability != NetworkReachability.NotReachable)
-            {
-                using (var req = UnityWebRequest.Get(url))
-                {
-                    yield return req.SendWebRequest();
-                    if (RequestSucceeded(req))
-                    {
-                        byte[] data = Encoding.UTF8.GetBytes(req.downloadHandler.text);
-                        try { File.WriteAllBytes(encPath, EncryptBytes(data)); } catch { }
-                    }
-                }
-            }
-            yield break;
+            catch (Exception e) { Debug.LogWarning("[CacheService] РћС€РёР±РєР° С‡С‚РµРЅРёСЏ РєСЌС€Р°: " + e.Message); }
         }
 
-        // 2) Онлайн
-        using (var req = UnityWebRequest.Get(url))
+        // 2) РћРЅР»Р°Р№РЅ-РїСЂРѕРІРµСЂРєР° РІРµСЂСЃРёРё
+        using (var req = UnityWebRequest.Get(url + (url.Contains("?") ? "&" : "?") + "ts=" + DateTimeOffset.UtcNow.ToUnixTimeSeconds()))
         {
+            req.SetRequestHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+            req.SetRequestHeader("Pragma", "no-cache");
+            req.SetRequestHeader("Expires", "0");
+
             yield return req.SendWebRequest();
             if (!RequestSucceeded(req))
             {
-                onError?.Invoke(req.error);
+                if (cachedJson == null) onError?.Invoke(req.error);
                 yield break;
             }
 
-            byte[] data = Encoding.UTF8.GetBytes(req.downloadHandler.text);
-            try { File.WriteAllBytes(encPath, EncryptBytes(data)); } catch { }
-            onDone?.Invoke(req.downloadHandler.text);
+            string freshJson = req.downloadHandler.text;
+
+            bool needUpdate = false;
+            try
+            {
+                int cachedVer = ExtractVersion(cachedJson);
+                int freshVer = ExtractVersion(freshJson);
+                if (freshVer > cachedVer) needUpdate = true;
+            }
+            catch
+            {
+                // РµСЃР»Рё РЅРµС‚ РїРѕР»СЏ version в†’ СЃСЂР°РІРЅРёРІР°РµРј С‚РµРєСЃС‚
+                if (cachedJson != freshJson) needUpdate = true;
+            }
+
+            if (needUpdate)
+            {
+                try
+                {
+                    var bytes = Encoding.UTF8.GetBytes(freshJson);
+                    File.WriteAllBytes(encPath, EncryptBytes(bytes));
+                    string tmp = DecryptToTemp(encPath, ".json");
+                    string updated = File.ReadAllText(tmp, Encoding.UTF8);
+                    onDone?.Invoke(updated);
+                    Debug.Log("[CacheService] РћР±РЅРѕРІРёР» JSON РїРѕ РІРµСЂСЃРёРё: " + cacheKey);
+                }
+                catch (Exception e) { onError?.Invoke(e.Message); }
+            }
         }
     }
 
-    // ===================== IMAGES =====================
-    // В Texture2D
-    public static IEnumerator GetTexture(string url, string cacheKey, Action<Texture2D> onDone, Action<string> onError = null)
-        => GetTexture_Internal(url, cacheKey, onDone, 0, onError);
+    private static int ExtractVersion(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return 0;
+        if (json.Contains("\"version\""))
+        {
+            int i = json.IndexOf("\"version\"");
+            if (i >= 0)
+            {
+                int c = json.IndexOf(':', i);
+                if (c > 0)
+                {
+                    string sub = json.Substring(c + 1);
+                    string num = "";
+                    foreach (char ch in sub)
+                    {
+                        if (char.IsDigit(ch)) num += ch;
+                        else if (num.Length > 0) break;
+                    }
+                    if (int.TryParse(num, out int v)) return v;
+                }
+            }
+        }
+        return 0;
+    }
 
-    // В Sprite (есть maxSize)
-    public static IEnumerator GetTexture(string url, string cacheKey, Action<Sprite> onDone, int maxSize, Action<string> onError = null)
+    // ========= РљРђР РўРРќРљР =========
+    public static IEnumerator GetTexture(string urlNoExt, string cacheKey, Action<Texture2D> onDone, Action<string> onError = null)
+        => GetTexture_Internal(urlNoExt, cacheKey, onDone, 0, onError);
+
+    public static IEnumerator GetTexture(string urlNoExt, string cacheKey, Action<Sprite> onDone, int maxSize, Action<string> onError = null)
     {
         Texture2D tex = null;
-        yield return GetTexture_Internal(url, cacheKey, t => tex = t, maxSize, onError);
+        yield return GetTexture_Internal(urlNoExt, cacheKey, t => tex = t, maxSize, onError);
         if (tex != null)
         {
             var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
@@ -253,110 +580,117 @@ public static class CacheService
         }
     }
 
-    // Префетч без аллокации Texture2D/Sprite — просто кладём в кэш (перекодируем в PNG, опц. даунскейл)
-    public static IEnumerator GetTextureToCache(string url, string cacheKey, Action<bool> onDone, int maxSide = 0, Action<string> onError = null)
+    public static IEnumerator GetTextureToCache(string urlNoExt, string cacheKey, Action<bool> onDone, int maxSide = 0, Action<string> onError = null)
     {
         EnsureDirs();
-        string ext = ".png"; // унифицируем изображения как png в кэше
-        string encPath = CachePathEnc(cacheKey, ext);
-
+        string encPath = CachePathEnc(cacheKey, ".png");
         if (File.Exists(encPath)) { onDone?.Invoke(true); yield break; }
 
-        using (var req = UnityWebRequestTexture.GetTexture(MaybeWithExt(url, ext), false))
+        foreach (var cand in TextureCandidates(urlNoExt))
         {
-            yield return req.SendWebRequest();
-            if (!RequestSucceeded(req))
+            using (var req = UnityWebRequestTexture.GetTexture(cand, false))
             {
-                onError?.Invoke(req.error);
-                onDone?.Invoke(false);
-                yield break;
-            }
+                yield return req.SendWebRequest();
+                if (!RequestSucceeded(req)) continue;
 
-            try
-            {
-                var tex = DownloadHandlerTexture.GetContent(req);
-                if (maxSide > 0) tex = ResizeIfNeeded(tex, maxSide);
-                var png = tex.EncodeToPNG();
-                File.WriteAllBytes(encPath, EncryptBytes(png));
-                onDone?.Invoke(true);
-            }
-            catch (Exception e)
-            {
-                onError?.Invoke(e.Message);
-                onDone?.Invoke(false);
-            }
-        }
-    }
-
-    private static IEnumerator GetTexture_Internal(string url, string cacheKey, Action<Texture2D> onDone, int maxSize, Action<string> onError)
-    {
-        EnsureDirs();
-        foreach (var cand in TextureCandidates(url))
-        {
-            string ext = GuessExt(cand, ".png");
-            string encPath = CachePathEnc(cacheKey, ext);
-
-            // Кэш
-            if (File.Exists(encPath))
-            {
                 try
                 {
-                    string tmp = DecryptToTemp(encPath, ext);
-                    var data = File.ReadAllBytes(tmp);
-                    var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-                    tex.LoadImage(data, false);
+                    var tex = DownloadHandlerTexture.GetContent(req);
+                    if (maxSide > 0) tex = ResizeIfNeeded(tex, maxSide);
+
+                    var png = tex.EncodeToPNG();
+                    File.WriteAllBytes(encPath, EncryptBytes(png));
+                    onDone?.Invoke(true);
+                    yield break;
+                }
+                catch (Exception e)
+                {
+                    onError?.Invoke(e.Message);
+                    onDone?.Invoke(false);
+                    yield break;
+                }
+            }
+        }
+        onDone?.Invoke(false);
+        onError?.Invoke("Texture not found with tried extensions");
+    }
+
+    private static IEnumerator GetTexture_Internal(string urlNoExt, string cacheKey, Action<Texture2D> onDone, int maxSize, Action<string> onError)
+    {
+        EnsureDirs();
+        string encPath = CachePathEnc(cacheKey, ".png");
+
+        if (File.Exists(encPath))
+        {
+            try
+            {
+                string tmp = DecryptToTemp(encPath, ".png");
+                var bytes = File.ReadAllBytes(tmp);
+                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                tex.LoadImage(bytes, true);
+                if (maxSize > 0) tex = ResizeIfNeeded(tex, maxSize);
+                onDone?.Invoke(tex);
+            }
+            catch (Exception e) { onError?.Invoke(e.Message); }
+            yield break;
+        }
+
+        foreach (var cand in TextureCandidates(urlNoExt))
+        {
+            using (var req = UnityWebRequestTexture.GetTexture(cand, false))
+            {
+                yield return req.SendWebRequest();
+                if (!RequestSucceeded(req)) continue;
+
+                try
+                {
+                    var tex = DownloadHandlerTexture.GetContent(req);
                     if (maxSize > 0) tex = ResizeIfNeeded(tex, maxSize);
+
+                    var png = tex.EncodeToPNG();
+                    File.WriteAllBytes(encPath, EncryptBytes(png));
                     onDone?.Invoke(tex);
                     yield break;
                 }
-                catch { /* попробуем онлайн */ }
-            }
-
-            // Онлайн
-            using (var req = UnityWebRequestTexture.GetTexture(MaybeWithExt(cand, ext), false))
-            {
-                yield return req.SendWebRequest();
-                if (RequestSucceeded(req))
-                {
-                    try
-                    {
-                        var tex = DownloadHandlerTexture.GetContent(req);
-                        if (maxSize > 0) tex = ResizeIfNeeded(tex, maxSize);
-
-                        var png = tex.EncodeToPNG();
-                        File.WriteAllBytes(encPath, EncryptBytes(png));
-                        onDone?.Invoke(tex);
-                        yield break;
-                    }
-                    catch { }
-                }
+                catch (Exception e) { onError?.Invoke(e.Message); yield break; }
             }
         }
-        onError?.Invoke("image not found");
+
+        onError?.Invoke("Texture not found with tried extensions");
     }
 
-    // ===================== FILES (video/mp4 etc.) =====================
-    public static IEnumerator GetFile(string url, string cacheKey, Action<string> onDone, string forcedExt = null, Action<string> onError = null)
+    // ========= Р¤РђР™Р›Р« (РІРёРґРµРѕ Рё С‚.Рї.) =========
+    public static IEnumerator GetFile(
+        string url,
+        string cacheKey,
+        Action<string> onDone,
+        string forcedExt = null,
+        Action<string> onError = null,
+        Action<float> onProgress = null
+    )
     {
         EnsureDirs();
         string ext = forcedExt ?? GuessExt(url, ".bin");
         string encPath = CachePathEnc(cacheKey, ext);
 
-        // Кэш ? отдаём временный plaintext
         if (File.Exists(encPath))
         {
-            string tmp = DecryptToTemp(encPath, ext);
+            string tmp = GetOrMakePlainTemp(encPath, ext);
+            onProgress?.Invoke(1f);
             onDone?.Invoke(tmp);
             yield break;
         }
 
-        // Качаем ? кладём в кэш .enc ? отдаём временный plaintext
         string tmpDownload = Path.Combine(TempDir, Guid.NewGuid().ToString("N") + NormalizeExt(ext));
         using (var req = UnityWebRequest.Get(MaybeWithExt(url, ext)))
         {
             req.downloadHandler = new DownloadHandlerFile(tmpDownload) { removeFileOnAbort = true };
-            yield return req.SendWebRequest();
-
+            var op = req.SendWebRequest();
+            while (!op.isDone)
+            {
+                onProgress?.Invoke(Mathf.Clamp01(req.downloadProgress));
+                yield return null;
+            }
             if (!RequestSucceeded(req))
             {
                 try { if (File.Exists(tmpDownload)) File.Delete(tmpDownload); } catch { }
@@ -369,6 +703,7 @@ public static class CacheService
         {
             byte[] data = File.ReadAllBytes(tmpDownload);
             File.WriteAllBytes(encPath, EncryptBytes(data));
+            onProgress?.Invoke(1f);
             onDone?.Invoke(tmpDownload);
         }
         catch (Exception e)
@@ -380,228 +715,214 @@ public static class CacheService
 
     public static string GetCachedPath(string cacheKey, string ext)
     {
-        EnsureDirs();
-        string encPath = CachePathEnc(cacheKey, ext);
-        return File.Exists(encPath) ? encPath : null;
+        string p = CachePathEnc(cacheKey, ext);
+        return File.Exists(p) ? p : null;
     }
 
-    public static string DecryptToTemp(string encPath, string plainExt, bool overwrite = true)
+    public static string GetOrMakePlainTemp(string encPath, string ext, bool overwriteIfExists = false)
     {
         EnsureDirs();
         try
         {
+            string name = Path.GetFileNameWithoutExtension(encPath);
+            string tmp = Path.Combine(TempDir, name + NormalizeExt(ext));
+            if (File.Exists(tmp) && !overwriteIfExists) return tmp;
+
             byte[] enc = File.ReadAllBytes(encPath);
             byte[] plain = DecryptBytes(enc);
-            string e = NormalizeExt(plainExt);
-            string tmp = Path.Combine(TempDir, Guid.NewGuid().ToString("N") + e);
-            if (File.Exists(tmp) && overwrite) File.Delete(tmp);
+            if (File.Exists(tmp) && overwriteIfExists) File.Delete(tmp);
             File.WriteAllBytes(tmp, plain);
             return tmp;
         }
         catch { return null; }
     }
 
-    // ===================== HELPERS =====================
+    public static int CleanupTemp(int maxAgeHours = 24)
+    {
+        try
+        {
+            EnsureDirs();
+            var now = DateTime.UtcNow;
+            int removed = 0;
+            var di = new DirectoryInfo(TempDir);
+            if (!di.Exists) return 0;
+            foreach (var fi in di.GetFiles())
+            {
+                var age = now - fi.LastWriteTimeUtc;
+                if (age.TotalHours > maxAgeHours) { try { fi.Delete(); removed++; } catch { } }
+            }
+            return removed;
+        }
+        catch { return 0; }
+    }
+
+    public static int ClearAllEncrypted()
+    {
+        try
+        {
+            EnsureDirs();
+            int removed = 0;
+            var di = new DirectoryInfo(CacheDir);
+            if (!di.Exists) return 0;
+            foreach (var fi in di.GetFiles())
+            {
+                try { fi.Delete(); removed++; } catch { }
+            }
+            return removed;
+        }
+        catch { return 0; }
+    }
+
+    public static bool DeleteCached(string cacheKey, string ext)
+    {
+        try
+        {
+            EnsureDirs();
+            string path = CachePathEnc(cacheKey, ext);
+            if (File.Exists(path)) { File.Delete(path); return true; }
+        }
+        catch { }
+        return false;
+    }
+
+    public static void LogPersistentPath()
+    {
+        Debug.Log("[CacheService] persistentDataPath = " + Application.persistentDataPath +
+                  "\ncache     = " + CacheDir +
+                  "\ncache_tmp = " + TempDir);
+    }
+
     private static void EnsureDirs()
     {
         try { if (!Directory.Exists(CacheDir)) Directory.CreateDirectory(CacheDir); } catch { }
         try { if (!Directory.Exists(TempDir)) Directory.CreateDirectory(TempDir); } catch { }
     }
 
-    private static string CachePathEnc(string key, string ext)
+    private static string CachePathEnc(string cacheKey, string ext)
     {
-        string hash = Hash((key ?? "").ToLowerInvariant());
-        string e = NormalizeExt(ext);
-        return Path.Combine(CacheDir, hash + e + ".enc");
+        string md5 = MD5Hex(cacheKey);
+        return Path.Combine(CacheDir, md5 + NormalizeExt(ext) + ".enc");
     }
 
-    private static string NormalizeExt(string ext)
-    {
-        if (string.IsNullOrEmpty(ext)) return ".bin";
-        if (!ext.StartsWith(".")) ext = "." + ext;
-        return ext.ToLowerInvariant();
-    }
+    private static string NormalizeExt(string ext) => string.IsNullOrEmpty(ext) ? "" : (ext.StartsWith(".") ? ext : "." + ext);
 
-    private static string[] TextureCandidates(string url)
+    private static string GuessExt(string url, string fallback)
     {
-        SplitUrl(url, out string baseUrl, out string query);
-        string ext = Path.GetExtension(baseUrl);
-        if (!string.IsNullOrEmpty(ext)) return new[] { url };
-        return new[]
+        try
         {
-            baseUrl + query,
-            baseUrl + ".png"  + query,
-            baseUrl + ".jpg"  + query,
-            baseUrl + ".jpeg" + query,
-            baseUrl + ".webp" + query
-        };
+            int q = url.IndexOf('?');
+            string baseUrl = (q >= 0) ? url.Substring(0, q) : url;
+            string e = Path.GetExtension(baseUrl);
+            return string.IsNullOrEmpty(e) ? fallback : e;
+        }
+        catch { return fallback; }
     }
 
     private static string MaybeWithExt(string url, string ext)
     {
-        SplitUrl(url, out string baseUrl, out string query);
-        string e = Path.GetExtension(baseUrl);
-        if (string.IsNullOrEmpty(e)) baseUrl += NormalizeExt(ext);
-        return baseUrl + query;
-    }
-
-    private static void SplitUrl(string url, out string baseUrl, out string query)
-    {
+        if (url.StartsWith("file:")) return url;
         int q = url.IndexOf('?');
-        if (q >= 0) { baseUrl = url.Substring(0, q); query = url.Substring(q); }
-        else { baseUrl = url; query = string.Empty; }
+        string baseUrl = (q >= 0) ? url.Substring(0, q) : url;
+        string query = (q >= 0) ? url.Substring(q) : "";
+        string e = Path.GetExtension(baseUrl);
+        if (string.IsNullOrEmpty(e)) return baseUrl + NormalizeExt(ext) + query;
+        return url;
     }
 
-    private static string GuessExt(string urlOrExt, string fallback)
+    private static IEnumerable<string> TextureCandidates(string urlNoExt)
     {
-        if (string.IsNullOrEmpty(urlOrExt)) return fallback;
-        int q = urlOrExt.IndexOf('?');
-        string baseUrl = q >= 0 ? urlOrExt.Substring(0, q) : urlOrExt;
-        string ext = Path.GetExtension(baseUrl);
-        if (string.IsNullOrEmpty(ext)) return fallback;
-        if (!ext.StartsWith(".")) ext = "." + ext;
-        return ext.ToLowerInvariant();
-    }
-
-    private static string Hash(string s)
-    {
-        using (var md5 = MD5.Create())
+        string[] exts = { "", ".png", ".jpg", ".jpeg", ".webp" };
+        foreach (var e in exts)
         {
-            var data = Encoding.UTF8.GetBytes(s);
-            var hash = md5.ComputeHash(data);
-            var sb = new StringBuilder(hash.Length * 2);
-            foreach (var b in hash) sb.Append(b.ToString("x2"));
-            return sb.ToString();
+            int q = urlNoExt.IndexOf('?');
+            string baseUrl = (q >= 0) ? urlNoExt.Substring(0, q) : urlNoExt;
+            string query = (q >= 0) ? urlNoExt.Substring(q) : "";
+            yield return string.IsNullOrEmpty(e) ? urlNoExt : (baseUrl + e + query);
         }
     }
 
-    private static Texture2D ResizeIfNeeded(Texture2D src, int maxSize)
+    private static Texture2D ResizeIfNeeded(Texture2D src, int maxSide)
     {
-        if (maxSize <= 0) return src;
+        if (src == null || maxSide <= 0) return src;
         int w = src.width, h = src.height;
-        int max = Mathf.Max(w, h);
-        if (max <= maxSize) return src;
+        int m = Mathf.Max(w, h);
+        if (m <= maxSide) return src;
 
-        float k = (float)maxSize / max;
+        float k = (float)maxSide / m;
         int nw = Mathf.Max(1, Mathf.RoundToInt(w * k));
         int nh = Mathf.Max(1, Mathf.RoundToInt(h * k));
 
-        var rt = new RenderTexture(nw, nh, 0, RenderTextureFormat.ARGB32);
-        var prev = RenderTexture.active;
+        var rt = RenderTexture.GetTemporary(nw, nh, 0, RenderTextureFormat.ARGB32);
         Graphics.Blit(src, rt);
+        var prev = RenderTexture.active;
         RenderTexture.active = rt;
 
-        var tex = new Texture2D(nw, nh, TextureFormat.RGBA32, false);
-        tex.ReadPixels(new Rect(0, 0, nw, nh), 0, 0); tex.Apply();
-        RenderTexture.active = prev; rt.Release();
-        return tex;
+        var dst = new Texture2D(nw, nh, TextureFormat.RGBA32, false);
+        dst.ReadPixels(new Rect(0, 0, nw, nh), 0, 0);
+        dst.Apply(false, true);
+
+        RenderTexture.active = prev;
+        RenderTexture.ReleaseTemporary(rt);
+
+        UnityEngine.Object.Destroy(src);
+        return dst;
     }
 
-    // ===================== CRYPTO =====================
-    private const string AppSecret = "OrtAppSecret_v1_ChangeMe"; // замени на свой секрет в релизе
-    private static byte[] Key
+    private static string MD5Hex(string s)
     {
-        get
-        {
-            try
-            {
-                string material = SystemInfo.deviceUniqueIdentifier + "|" + AppSecret;
-                using (var sha = SHA256.Create())
-                {
-                    var b = Encoding.UTF8.GetBytes(material);
-                    return sha.ComputeHash(b); // 32 байта
-                }
-            }
-            catch
-            {
-                return Encoding.UTF8.GetBytes("0123456789abcdef0123456789abcdef");
-            }
-        }
+        using var md5 = MD5.Create();
+        var b = Encoding.UTF8.GetBytes(s);
+        var h = md5.ComputeHash(b);
+        var sb = new StringBuilder(h.Length * 2);
+        foreach (var x in h) sb.Append(x.ToString("x2"));
+        return sb.ToString();
     }
 
-    private static byte[] EncryptBytes(byte[] data)
+    private static readonly byte[] Key = new byte[16] { 0x23, 0x55, 0xA1, 0x0F, 0x9C, 0xDE, 0x01, 0x77, 0x33, 0x10, 0xB2, 0x5A, 0xC8, 0x19, 0x4D, 0xEE };
+    private static readonly byte[] IV = new byte[16] { 0x10, 0x22, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0, 0x00 };
+
+    private static byte[] EncryptBytes(byte[] plain)
     {
-        using (var aes = Aes.Create())
-        {
-            aes.KeySize = 256; aes.BlockSize = 128; aes.Mode = CipherMode.CBC; aes.Padding = PaddingMode.PKCS7; aes.Key = Key;
-            aes.GenerateIV();
-            using (var enc = aes.CreateEncryptor())
-            {
-                var body = enc.TransformFinalBlock(data, 0, data.Length);
-                byte[] res = new byte[16 + body.Length];
-                Buffer.BlockCopy(aes.IV, 0, res, 0, 16);
-                Buffer.BlockCopy(body, 0, res, 16, body.Length);
-                return res;
-            }
-        }
+        using var aes = Aes.Create();
+        aes.Key = Key; aes.IV = IV; aes.Padding = PaddingMode.PKCS7; aes.Mode = CipherMode.CBC;
+        using var ms = new MemoryStream();
+        using (var cs = new CryptoStream(ms, aes.CreateEncryptor(), CryptoStreamMode.Write))
+            cs.Write(plain, 0, plain.Length);
+        return ms.ToArray();
     }
 
-    private static byte[] DecryptBytes(byte[] data)
+    private static byte[] DecryptBytes(byte[] enc)
     {
-        using (var aes = Aes.Create())
-        {
-            aes.KeySize = 256; aes.BlockSize = 128; aes.Mode = CipherMode.CBC; aes.Padding = PaddingMode.PKCS7; aes.Key = Key;
-            byte[] iv = new byte[16];
-            Buffer.BlockCopy(data, 0, iv, 0, 16);
-            aes.IV = iv;
-            using (var dec = aes.CreateDecryptor())
-            {
-                return dec.TransformFinalBlock(data, 16, data.Length - 16);
-            }
-        }
+        using var aes = Aes.Create();
+        aes.Key = Key; aes.IV = IV; aes.Padding = PaddingMode.PKCS7; aes.Mode = CipherMode.CBC;
+        using var ms = new MemoryStream(enc);
+        using var cs = new CryptoStream(ms, aes.CreateDecryptor(), CryptoStreamMode.Read);
+        using var outMs = new MemoryStream();
+        cs.CopyTo(outMs);
+        return outMs.ToArray();
     }
 
-    // ===== Реюз временного .mp4 и чистка tmp =====
-    public static string GetOrMakePlainTemp(string encPath, string plainExt, int maxAgeHours = 168)
+    private static string DecryptToTemp(string encPath, string ext)
     {
-        EnsureDirs();
+        string name = Path.GetFileNameWithoutExtension(encPath);
+        string tmp = Path.Combine(TempDir, name + NormalizeExt(ext));
         try
         {
-            if (string.IsNullOrEmpty(encPath) || !File.Exists(encPath)) return null;
-
-            string e = NormalizeExt(plainExt);
-            string baseName = Path.GetFileNameWithoutExtension(encPath);
-            if (string.IsNullOrEmpty(baseName)) baseName = Hash((encPath ?? "").ToLowerInvariant());
-            string target = Path.Combine(TempDir, baseName + e);
-
-            if (File.Exists(target))
-            {
-                var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(target);
-                if (age.TotalHours < maxAgeHours) return target;
-                try { File.Delete(target); } catch { }
-            }
-
-            string fresh = DecryptToTemp(encPath, e);
-            if (string.IsNullOrEmpty(fresh) || !File.Exists(fresh)) return null;
-
-            try
-            {
-                if (File.Exists(target)) return target;
-                File.Move(fresh, target);
-            }
-            catch { return fresh; }
-
-            return target;
+            if (File.Exists(tmp)) return tmp;
+            var enc = File.ReadAllBytes(encPath);
+            var plain = DecryptBytes(enc);
+            File.WriteAllBytes(tmp, plain);
+            return tmp;
         }
         catch { return null; }
     }
 
-    public static void CleanupTemp(int maxAgeHours = 240)
+    private static bool RequestSucceeded(UnityWebRequest req)
     {
-        EnsureDirs();
-        try
-        {
-            var di = new DirectoryInfo(TempDir);
-            if (!di.Exists) return;
-            foreach (var fi in di.GetFiles())
-            {
-                var age = DateTime.UtcNow - fi.LastWriteTimeUtc;
-                if (age.TotalHours > maxAgeHours)
-                {
-                    try { fi.Delete(); } catch { }
-                }
-            }
-        }
-        catch { }
+#if UNITY_2020_2_OR_NEWER
+        return req.result == UnityWebRequest.Result.Success;
+#else
+        return !req.isNetworkError && !req.isHttpError;
+#endif
     }
 }

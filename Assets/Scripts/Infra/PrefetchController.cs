@@ -1,12 +1,4 @@
-﻿//// ============================================
-//// File: Assets/Scripts/Infra/PrefetchController.cs
-//// Purpose: Sequential prefetch for offline (subjects → topics → subtopics → v1/v2/q1..qN)
-//// Changes (2025-08-25):
-////  • Add _running guard to avoid double runs
-////  • Add autoRunOnStart flag (default: true)
-////  • Use CacheService.GetTextureToCache() (no Sprite allocations)
-//// ============================================
-//using System;
+﻿//using System;
 //using System.Collections;
 //using System.Collections.Generic;
 //using UnityEngine;
@@ -14,219 +6,259 @@
 
 //public class PrefetchController : MonoBehaviour
 //{
-//    [Header("Storage (Firebase)")]
-//    [Tooltip("Хост бакета Firebase Storage (без https и /o)")]
-//    public string bucketHost = "first-5b828.firebasestorage.app";
-//    [Tooltip("Корневая папка с контентом в бакете")] public string contentRoot = "content";
+//    [Header("Verbose logs")] public bool verbose = false;
 
-//    [Header("Behavior")]
-//    public bool autoRunOnStart = true;
-//    public bool verbose = false;
-//    public int maxImageSide = 2048;
-
-//    // --- Back-compat aliases for old code ---
-//    public string bucketName { get => bucketHost; set => bucketHost = value; }
-//    public string contentFolder { get => contentRoot; set => contentRoot = value; }
-
-//    private bool _running;
-
-//    void Start()
+//    // ==== Массовый префетч (как было) ====
+//    public IEnumerator PrefetchAllSubjects(List<SubjectData> subjects)
 //    {
-//        if (autoRunOnStart) StartCoroutine(RunPrefetch());
-//    }
-
-//    // Back-compat: старый вызов StartCoroutine(prefetch.PrefetchAllSubjects(...))
-//    public IEnumerator PrefetchAllSubjects(System.Action onDone = null)
-//    {
-//        yield return RunPrefetch();
-//        onDone?.Invoke();
-//    }
-//    public IEnumerator PrefetchAllSubjects(object _) { yield return RunPrefetch(); }
-
-//    // ===== Основной префетч =====
-//    public IEnumerator RunPrefetch()
-//    {
-//        if (_running) { if (verbose) Debug.Log("[Prefetch] already running"); yield break; }
-//        if (Application.internetReachability == NetworkReachability.NotReachable)
-//        { if (verbose) Debug.Log("[Prefetch] offline → skip"); yield break; }
-//        _running = true;
-
-//        // 1) subjects.json
-//        string subjectsRel = $"{contentRoot}/subjects.json";
-//        string subjectsUrl = BuildStorageUrl(subjectsRel);
-
-//        string subjectsText = null; bool done = false;
-//        yield return CacheService.GetText(
-//            subjectsUrl,
-//            cacheKey: "json:" + subjectsRel,
-//            onDone: t => { subjectsText = t; done = true; },
-//            onError: e => { if (verbose) Debug.LogWarning("[Prefetch] subjects.json: " + e); done = true; }
-//        );
-//        if (!done) yield return null;
-//        if (string.IsNullOrEmpty(subjectsText)) { _running = false; yield break; }
-
-//        var subjects = ParseSubjects(subjectsText);
-//        if (subjects?.subjects == null || subjects.subjects.Count == 0) { _running = false; yield break; }
-//        subjects.subjects.Sort(CompareById);
-
-//        // 2) По предметам строго последовательно
-//        foreach (var s in subjects.subjects)
+//        foreach (var s in subjects)
 //        {
-//            if (s == null || string.IsNullOrEmpty(s.id)) continue;
-//            if (verbose) Debug.Log($"[Prefetch] Subject {s.id}");
+//            string topicsRel = $"{s.id}/topics.json";
+//            string topicsUrl = StoragePaths.Content(topicsRel);
 
-//            // topics.json
-//            string topicsRel = $"{contentRoot}/{s.id}/topics.json";
-//            string topicsUrl = BuildStorageUrl(topicsRel);
-
-//            string topicsText = null; done = false;
+//            string topicsJson = null;
 //            yield return CacheService.GetText(
 //                topicsUrl,
-//                cacheKey: "json:" + topicsRel,
-//                onDone: t => { topicsText = t; done = true; },
-//                onError: e => { if (e != null && e.Contains("404")) { if (verbose) Debug.Log($"[Prefetch] skip missing topics: {topicsRel}"); done = true; } else { if (verbose) Debug.LogWarning("[Prefetch] topics.json: " + e); done = true; } }
+//                "json:" + StoragePaths.ContentRoot + "/" + topicsRel,
+//                text => topicsJson = text,
+//                err => Debug.LogWarning("[Prefetch] topics.json error: " + err)
 //            );
-//            if (!done) yield return null;
-//            if (string.IsNullOrEmpty(topicsText)) continue;
+//            if (string.IsNullOrEmpty(topicsJson)) continue;
 
-//            var topics = ParseTopics(topicsText);
-//            if (topics?.topics == null || topics.topics.Count == 0) continue;
-//            topics.topics.Sort(CompareById);
-
-//            // 3) По темам строго последовательно
-//            foreach (var t in topics.topics)
+//            var topics = JsonFlex.ParseTopics(topicsJson) ?? new List<TopicData>();
+//            foreach (var t in topics)
 //            {
-//                if (t == null || string.IsNullOrEmpty(t.id)) continue;
-//                if (verbose) Debug.Log($"[Prefetch]  Topic {s.id}/{t.id}");
+//                string subRel = $"{s.id}/{t.id}/subtopics.json";
+//                string subUrl = StoragePaths.Content(subRel);
 
-//                // subtopics.json
-//                string subsRel = $"{contentRoot}/{s.id}/{t.id}/subtopics.json";
-//                string subsUrl = BuildStorageUrl(subsRel);
-
-//                string subsText = null; done = false;
+//                string subsJson = null;
 //                yield return CacheService.GetText(
-//                    subsUrl,
-//                    cacheKey: "json:" + subsRel,
-//                    onDone: txt => { subsText = txt; done = true; },
-//                    onError: e => { if (e != null && e.Contains("404")) { if (verbose) Debug.Log($"[Prefetch]  skip missing subtopics: {subsRel}"); done = true; } else { if (verbose) Debug.LogWarning("[Prefetch] subtopics.json: " + e); done = true; } }
+//                    subUrl,
+//                    "json:" + StoragePaths.ContentRoot + "/" + subRel,
+//                    text => subsJson = text,
+//                    err => Debug.LogWarning("[Prefetch] subtopics.json error: " + err)
 //                );
-//                if (!done) yield return null;
-//                if (string.IsNullOrEmpty(subsText)) continue;
+//                if (string.IsNullOrEmpty(subsJson)) continue;
 
-//                var subtopics = ParseSubtopics(subsText);
-//                if (subtopics?.subtopics == null || subtopics.subtopics.Count == 0) continue;
-//                subtopics.subtopics.Sort(CompareById);
-
-//                // 4) По подтемам: v1 → v2 → q1..qN
-//                foreach (var st in subtopics.subtopics)
+//                var subtopics = JsonFlex.ParseSubtopics(subsJson) ?? new List<SubtopicIndex>();
+//                foreach (var st in subtopics)
 //                {
-//                    if (st == null || string.IsNullOrEmpty(st.id)) continue;
-//                    if (verbose) Debug.Log($"[Prefetch]   Subtopic {s.id}/{t.id}/{st.id}");
+//                    string v1Url = StoragePaths.Content($"{s.id}/{t.id}/{st.id}/v1");
+//                    string v2Url = StoragePaths.Content($"{s.id}/{t.id}/{st.id}/v2");
 
-//                    // v1.mp4 и v2.mp4
-//                    yield return PrefetchVideo($"{contentRoot}/{s.id}/{t.id}/{st.id}/v1");
-//                    yield return PrefetchVideo($"{contentRoot}/{s.id}/{t.id}/{st.id}/v2");
+//                    yield return CacheService.GetFile(v1Url, cacheKey: "video:" + v1Url, onDone: _ => { }, forcedExt: ".mp4");
+//                    yield return CacheService.GetFile(v2Url, cacheKey: "video:" + v2Url, onDone: _ => { }, forcedExt: ".mp4");
 
-//                    // q1..qN
 //                    int qCount = st.answers != null ? st.answers.Count : 0;
-//                    for (int i = 1; i <= qCount; i++)
-//                    { yield return PrefetchImage($"{contentRoot}/{s.id}/{t.id}/{st.id}/q{i}"); }
+//                    for (int i = 0; i < qCount; i++)
+//                    {
+//                        string qUrl = StoragePaths.Content($"{s.id}/{t.id}/{st.id}/q{i + 1}");
+//                        yield return CacheService.GetTextureToCache(qUrl, cacheKey: "img:" + qUrl, onDone: _ => { });
+//                    }
 //                }
 //            }
 //        }
-//        if (verbose) Debug.Log("[Prefetch] done (sequential)");
-//        _running = false;
 //    }
 
-//    // === Helpers ===
-//    private IEnumerator PrefetchVideo(string relativePathWithoutExt)
-//    {
-//        string url = BuildStorageUrl(relativePathWithoutExt);
-//        bool ok = false;
-//        yield return CacheService.GetFile(
-//            url,
-//            cacheKey: "video:" + url,
-//            onDone: _ => { ok = true; if (verbose) Debug.Log("[Prefetch] video OK: " + relativePathWithoutExt); },
-//            forcedExt: ".mp4",
-//            onError: e => { if (verbose) Debug.LogWarning("[Prefetch] video FAIL: " + relativePathWithoutExt + " → " + e); }
-//        );
-//        if (!ok) yield return null; // keep strict order
-//    }
-
-//    private IEnumerator PrefetchImage(string relativePathNoExt)
-//    {
-//        string url = BuildStorageUrl(relativePathNoExt);
-//        bool done = false;
-//        yield return CacheService.GetTextureToCache(
-//            url,
-//            cacheKey: "img:" + url,
-//            maxSide: maxImageSide,
-//            onDone: ok => { done = true; if (verbose) Debug.Log(ok ? "[Prefetch] image OK: " + relativePathNoExt : "[Prefetch] image FAIL: " + relativePathNoExt); }
-//        );
-//        if (!done) yield return null;
-//    }
-
-//    private string BuildStorageUrl(string relativePath)
-//    {
-//        string encoded = UnityWebRequest.EscapeURL(relativePath).Replace("+", "%20");
-//        return $"https://firebasestorage.googleapis.com/v0/b/{bucketHost}/o/{encoded}?alt=media";
-//    }
-
-//    // ===== JSON parsing =====
-//    [Serializable] private class SubjectsRoot { public string version; public List<SubjectRow> subjects; }
-//    [Serializable] private class SubjectRow { public string id; public string name; }
-//    [Serializable] private class TopicsRoot { public List<TopicRow> topics; }
-//    [Serializable] private class TopicRow { public string id; public string name; }
-//    [Serializable] private class SubtopicsRoot { public List<SubtopicRow> subtopics; }
+//    // ==== Плавный прогресс по БАЙТАМ для одной подтемы ====
 //    [Serializable] private class SubtopicRow { public string id; public string title; public List<string> answers; }
+//    [Serializable] private class SubtopicsRoot { public List<SubtopicRow> subtopics; }
 
-//    private static SubjectsRoot ParseSubjects(string json) { try { return JsonUtility.FromJson<SubjectsRoot>(json); } catch { return null; } }
-//    private static TopicsRoot ParseTopics(string json) { try { return JsonUtility.FromJson<TopicsRoot>(json); } catch { return null; } }
-//    private static SubtopicsRoot ParseSubtopics(string json) { try { return JsonUtility.FromJson<SubtopicsRoot>(json); } catch { return null; } }
-
-//    private static int CompareById(object aObj, object bObj)
+//    private struct Asset
 //    {
-//        string a = null, b = null;
-//        switch (aObj)
+//        public string url;       // без расширения (как в проекте)
+//        public string cacheKey;  // "video:..." или "img:..."
+//        public string ext;       // ".mp4" / ".png"
+//        public bool isImage;
+//        public long sizeBytes; // из HEAD (если 0 — поставим дефолт)
+//    }
+
+//    public IEnumerator PrefetchSubtopicCoursesProgress(
+//        string subjectId,
+//        string topicId,
+//        string subtopicId,
+//        Action<float> onProgress,      // 0..1
+//        Action<bool> onDone = null    // success
+//    )
+//    {
+//        bool ok = true;
+
+//        // 1) Узнаём кол-во вопросов (для списка картинок)
+//        string subsRel = $"{subjectId}/{topicId}/subtopics.json";
+//        string subsUrl = StoragePaths.Content(subsRel);
+//        string subsText = null;
+//        yield return CacheService.GetText(
+//            subsUrl,
+//            "json:" + StoragePaths.ContentRoot + "/" + subsRel,
+//            t => subsText = t,
+//            _ => subsText = null
+//        );
+
+//        int qCount = 0;
+//        if (!string.IsNullOrEmpty(subsText))
 //        {
-//            case SubjectRow sa: a = sa.id; break;
-//            case TopicRow ta: a = ta.id; break;
-//            case SubtopicRow sba: a = sba.id; break;
+//            try
+//            {
+//                var root = JsonUtility.FromJson<SubtopicsRoot>(subsText);
+//                if (root?.subtopics != null)
+//                {
+//                    foreach (var st in root.subtopics)
+//                        if (st != null && st.id == subtopicId)
+//                        { qCount = st.answers != null ? st.answers.Count : 0; break; }
+//                }
+//            }
+//            catch { }
 //        }
-//        switch (bObj)
+
+//        // 2) Составляем список недостающих ассетов
+//        var assets = new List<Asset>();
+
+//        string v1Url = StoragePaths.Content($"{subjectId}/{topicId}/{subtopicId}/v1");
+//        if (string.IsNullOrEmpty(CacheService.GetCachedPath("video:" + v1Url, ".mp4")))
+//            assets.Add(new Asset { url = v1Url, cacheKey = "video:" + v1Url, ext = ".mp4", isImage = false });
+
+//        string v2Url = StoragePaths.Content($"{subjectId}/{topicId}/{subtopicId}/v2");
+//        if (string.IsNullOrEmpty(CacheService.GetCachedPath("video:" + v2Url, ".mp4")))
+//            assets.Add(new Asset { url = v2Url, cacheKey = "video:" + v2Url, ext = ".mp4", isImage = false });
+
+//        for (int i = 0; i < qCount; i++)
 //        {
-//            case SubjectRow sb: b = sb.id; break;
-//            case TopicRow tb: b = tb.id; break;
-//            case SubtopicRow sbb: b = sbb.id; break;
+//            string qUrl = StoragePaths.Content($"{subjectId}/{topicId}/{subtopicId}/q{i + 1}");
+//            if (string.IsNullOrEmpty(CacheService.GetCachedPath("img:" + qUrl, ".png")))
+//                assets.Add(new Asset { url = qUrl, cacheKey = "img:" + qUrl, ext = ".png", isImage = true });
 //        }
-//        if (int.TryParse(a, out var ai) && int.TryParse(b, out var bi)) return ai.CompareTo(bi);
-//        return string.Compare(a, b, StringComparison.Ordinal);
+
+//        if (assets.Count == 0) { onProgress?.Invoke(1f); onDone?.Invoke(true); yield break; }
+
+//        // 3) HEAD — узнаём размеры в байтах (если сервер не даёт — подставим оценки)
+//        for (int i = 0; i < assets.Count; i++)
+//        {
+//            long len = 0;
+//            yield return HeadContentLength(WithExt(assets[i].url, assets[i].ext), v => len = v);
+
+//            if (len <= 0)
+//            {
+//                // приблизительные веса: видео 25 МБ, картинка 200 КБ (подбери под свои данные)
+//                len = assets[i].isImage ? 200L * 1024L : 25L * 1024L * 1024L;
+//            }
+
+//            var a = assets[i];
+//            a.sizeBytes = len;
+//            assets[i] = a;
+//        }
+
+//        long totalBytes = 0;
+//        foreach (var a in assets) totalBytes += a.sizeBytes;
+//        long doneBytes = 0;
+
+//        onProgress?.Invoke(0f);
+
+//        // 4) Качаем последовательно, обновляя прогресс по байтам
+//        foreach (var a in assets)
+//        {
+//            if (a.isImage)
+//            {
+//                bool okImg = false;
+//                yield return CacheService.GetTextureToCache(a.url, a.cacheKey, o => okImg = o);
+//                ok &= okImg;
+//                doneBytes += a.sizeBytes;
+//                onProgress?.Invoke(Mathf.Clamp01((float)doneBytes / totalBytes));
+//            }
+//            else
+//            {
+//                bool okVid = false;
+//                yield return CacheService.GetFile(
+//                    a.url,
+//                    a.cacheKey,
+//                    _ => { okVid = true; },
+//                    forcedExt: a.ext,
+//                    onError: _ => { okVid = false; },
+//                    onProgress: p =>
+//                    {
+//                        // p = 0..1 для текущего файла → переводим в байты
+//                        long curBytes = (long)(Mathf.Clamp01(p) * a.sizeBytes);
+//                        float totalP = (float)(doneBytes + curBytes) / totalBytes;
+//                        onProgress?.Invoke(Mathf.Clamp01(totalP));
+//                    }
+//                );
+//                ok &= okVid;
+//                doneBytes += a.sizeBytes;
+//                onProgress?.Invoke(Mathf.Clamp01((float)doneBytes / totalBytes));
+//            }
+//        }
+
+//        onProgress?.Invoke(1f);
+//        onDone?.Invoke(ok);
+//    }
+
+//    // ==== HELPERS ====
+
+//    // HEAD-запрос: вернуть Content-Length (байты). 0 — если нет заголовка.
+//    private IEnumerator HeadContentLength(string urlWithExt, Action<long> onResult)
+//    {
+//        using (var req = UnityWebRequest.Head(urlWithExt))
+//        {
+//            yield return req.SendWebRequest();
+//            if (!RequestSucceeded(req)) { onResult?.Invoke(0); yield break; }
+
+//            string len = req.GetResponseHeader("Content-Length");
+//            if (long.TryParse(len, out long v) && v > 0) onResult?.Invoke(v);
+//            else onResult?.Invoke(0);
+//        }
+//    }
+
+//    private string WithExt(string urlMaybeNoExt, string ext)
+//    {
+//        if (string.IsNullOrEmpty(ext) || ext.StartsWith(".") == false) ext = "." + ext;
+//        int q = urlMaybeNoExt.IndexOf('?');
+//        string baseUrl = (q >= 0) ? urlMaybeNoExt.Substring(0, q) : urlMaybeNoExt;
+//        string query = (q >= 0) ? urlMaybeNoExt.Substring(q) : "";
+//        if (System.IO.Path.GetExtension(baseUrl).Length == 0) return baseUrl + ext + query;
+//        return urlMaybeNoExt;
+//    }
+
+//    private bool RequestSucceeded(UnityWebRequest req)
+//    {
+//#if UNITY_2020_2_OR_NEWER
+//        return req.result == UnityWebRequest.Result.Success;
+//#else
+//        return !req.isNetworkError && !req.isHttpError;
+//#endif
 //    }
 //}
 
-// ===============================
-// PrefetchController.cs — updated to use StoragePaths
-// ===============================
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Networking;
 
 public class PrefetchController : MonoBehaviour
 {
+    public static PrefetchController Instance { get; private set; }
+
+    private void Awake()
+    {
+        Instance = this;
+    }
+
     [Header("Verbose logs")] public bool verbose = false;
 
+    // ==== Массовый префетч (как было) ====
     public IEnumerator PrefetchAllSubjects(List<SubjectData> subjects)
     {
         foreach (var s in subjects)
         {
             string topicsRel = $"{s.id}/topics.json";
             string topicsUrl = StoragePaths.Content(topicsRel);
-            if (verbose) Debug.Log("[Prefetch] topics.json: " + topicsUrl);
 
             string topicsJson = null;
-            yield return CacheService.GetText(topicsUrl, "json:" + StoragePaths.ContentRoot + "/" + topicsRel,
+            yield return CacheService.GetText(
+                topicsUrl,
+                "json:" + StoragePaths.ContentRoot + "/" + topicsRel,
                 text => topicsJson = text,
-                err => Debug.LogWarning("[Prefetch] topics.json error: " + err));
+                err => Debug.LogWarning("[Prefetch] topics.json error: " + err)
+            );
             if (string.IsNullOrEmpty(topicsJson)) continue;
 
             var topics = JsonFlex.ParseTopics(topicsJson) ?? new List<TopicData>();
@@ -234,12 +266,14 @@ public class PrefetchController : MonoBehaviour
             {
                 string subRel = $"{s.id}/{t.id}/subtopics.json";
                 string subUrl = StoragePaths.Content(subRel);
-                if (verbose) Debug.Log("[Prefetch] subtopics.json: " + subUrl);
 
                 string subsJson = null;
-                yield return CacheService.GetText(subUrl, "json:" + StoragePaths.ContentRoot + "/" + subRel,
+                yield return CacheService.GetText(
+                    subUrl,
+                    "json:" + StoragePaths.ContentRoot + "/" + subRel,
                     text => subsJson = text,
-                    err => Debug.LogWarning("[Prefetch] subtopics.json error: " + err));
+                    err => Debug.LogWarning("[Prefetch] subtopics.json error: " + err)
+                );
                 if (string.IsNullOrEmpty(subsJson)) continue;
 
                 var subtopics = JsonFlex.ParseSubtopics(subsJson) ?? new List<SubtopicIndex>();
@@ -260,5 +294,221 @@ public class PrefetchController : MonoBehaviour
                 }
             }
         }
+    }
+
+    // ==== Плавный прогресс по БАЙТАМ для одной подтемы ====
+    [Serializable] private class SubtopicRow { public string id; public string title; public List<string> answers; }
+    [Serializable] private class SubtopicsRoot { public List<SubtopicRow> subtopics; }
+
+    private struct Asset
+    {
+        public string url;
+        public string cacheKey;
+        public string ext;
+        public bool isImage;
+        public long sizeBytes;
+    }
+
+    public IEnumerator PrefetchSubtopicCoursesProgress(
+        string subjectId,
+        string topicId,
+        string subtopicId,
+        Action<float> onProgress,
+        Action<bool> onDone = null
+    )
+    {
+        bool ok = true;
+
+        string subsRel = $"{subjectId}/{topicId}/subtopics.json";
+        string subsUrl = StoragePaths.Content(subsRel);
+        string subsText = null;
+        yield return CacheService.GetText(
+            subsUrl,
+            "json:" + StoragePaths.ContentRoot + "/" + subsRel,
+            t => subsText = t,
+            _ => subsText = null
+        );
+
+        int qCount = 0;
+        if (!string.IsNullOrEmpty(subsText))
+        {
+            try
+            {
+                var root = JsonUtility.FromJson<SubtopicsRoot>(subsText);
+                if (root?.subtopics != null)
+                {
+                    foreach (var st in root.subtopics)
+                        if (st != null && st.id == subtopicId)
+                        { qCount = st.answers != null ? st.answers.Count : 0; break; }
+                }
+            }
+            catch { }
+        }
+
+        var assets = new List<Asset>();
+
+        string v1Url = StoragePaths.Content($"{subjectId}/{topicId}/{subtopicId}/v1");
+        if (string.IsNullOrEmpty(CacheService.GetCachedPath("video:" + v1Url, ".mp4")))
+            assets.Add(new Asset { url = v1Url, cacheKey = "video:" + v1Url, ext = ".mp4", isImage = false });
+
+        string v2Url = StoragePaths.Content($"{subjectId}/{topicId}/{subtopicId}/v2");
+        if (string.IsNullOrEmpty(CacheService.GetCachedPath("video:" + v2Url, ".mp4")))
+            assets.Add(new Asset { url = v2Url, cacheKey = "video:" + v2Url, ext = ".mp4", isImage = false });
+
+        for (int i = 0; i < qCount; i++)
+        {
+            string qUrl = StoragePaths.Content($"{subjectId}/{topicId}/{subtopicId}/q{i + 1}");
+            if (string.IsNullOrEmpty(CacheService.GetCachedPath("img:" + qUrl, ".png")))
+                assets.Add(new Asset { url = qUrl, cacheKey = "img:" + qUrl, ext = ".png", isImage = true });
+        }
+
+        if (assets.Count == 0) { onProgress?.Invoke(1f); onDone?.Invoke(true); yield break; }
+
+        for (int i = 0; i < assets.Count; i++)
+        {
+            long len = 0;
+            yield return HeadContentLength(WithExt(assets[i].url, assets[i].ext), v => len = v);
+
+            if (len <= 0)
+                len = assets[i].isImage ? 200L * 1024L : 25L * 1024L * 1024L;
+
+            var a = assets[i];
+            a.sizeBytes = len;
+            assets[i] = a;
+        }
+
+        long totalBytes = 0;
+        foreach (var a in assets) totalBytes += a.sizeBytes;
+        long doneBytes = 0;
+
+        onProgress?.Invoke(0f);
+
+        foreach (var a in assets)
+        {
+            if (a.isImage)
+            {
+                bool okImg = false;
+                yield return CacheService.GetTextureToCache(a.url, a.cacheKey, o => okImg = o);
+                ok &= okImg;
+                doneBytes += a.sizeBytes;
+                onProgress?.Invoke(Mathf.Clamp01((float)doneBytes / totalBytes));
+            }
+            else
+            {
+                bool okVid = false;
+                yield return CacheService.GetFile(
+                    a.url,
+                    a.cacheKey,
+                    _ => { okVid = true; },
+                    forcedExt: a.ext,
+                    onError: _ => { okVid = false; },
+                    onProgress: p =>
+                    {
+                        long curBytes = (long)(Mathf.Clamp01(p) * a.sizeBytes);
+                        float totalP = (float)(doneBytes + curBytes) / totalBytes;
+                        onProgress?.Invoke(Mathf.Clamp01(totalP));
+                    }
+                );
+                ok &= okVid;
+                doneBytes += a.sizeBytes;
+                onProgress?.Invoke(Mathf.Clamp01((float)doneBytes / totalBytes));
+            }
+        }
+
+        onProgress?.Invoke(1f);
+        onDone?.Invoke(ok);
+    }
+
+    // ==== HELPERS ====
+
+    private IEnumerator HeadContentLength(string urlWithExt, Action<long> onResult)
+    {
+        using (var req = UnityWebRequest.Head(urlWithExt))
+        {
+            yield return req.SendWebRequest();
+            if (!RequestSucceeded(req)) { onResult?.Invoke(0); yield break; }
+
+            string len = req.GetResponseHeader("Content-Length");
+            if (long.TryParse(len, out long v) && v > 0) onResult?.Invoke(v);
+            else onResult?.Invoke(0);
+        }
+    }
+
+    private string WithExt(string urlMaybeNoExt, string ext)
+    {
+        if (string.IsNullOrEmpty(ext) || ext.StartsWith(".") == false) ext = "." + ext;
+        int q = urlMaybeNoExt.IndexOf('?');
+        string baseUrl = (q >= 0) ? urlMaybeNoExt.Substring(0, q) : urlMaybeNoExt;
+        string query = (q >= 0) ? urlMaybeNoExt.Substring(q) : "";
+        if (System.IO.Path.GetExtension(baseUrl).Length == 0) return baseUrl + ext + query;
+        return urlMaybeNoExt;
+    }
+
+    private bool RequestSucceeded(UnityWebRequest req)
+    {
+#if UNITY_2020_2_OR_NEWER
+        return req.result == UnityWebRequest.Result.Success;
+#else
+        return !req.isNetworkError && !req.isHttpError;
+#endif
+    }
+
+    // ==== ДОБАВЛЕННЫЙ МЕТОД ====
+
+    public IEnumerator PrefetchPracticeJsonOnly()
+    {
+        string subjectsRel = "subjects.json";
+        string subjectsUrl = StoragePaths.Practise(subjectsRel);
+        string subjectsKey = "json:" + StoragePaths.PractiseRoot + "/" + subjectsRel;
+
+        string subjectsRaw = null;
+        bool subjOk = false;
+
+        yield return CacheService.GetText(
+            subjectsUrl, subjectsKey,
+            t => { subjectsRaw = t; subjOk = true; },
+            e => { subjOk = false; }
+        );
+
+        if (!subjOk || string.IsNullOrEmpty(subjectsRaw))
+        {
+            Debug.LogWarning("[PrefetchController] Не удалось получить subjects.json");
+            yield break;
+        }
+
+        var subjects = JsonFlex.ParseSubjects(subjectsRaw) ?? new List<SubjectData>();
+        foreach (var s in subjects)
+        {
+            string topicsRel = $"{s.id}/topics.json";
+            string topicsUrl = StoragePaths.Practise(topicsRel);
+            string topicsKey = "json:" + StoragePaths.PractiseRoot + "/" + topicsRel;
+
+            string topicsRaw = null;
+            bool topOk = false;
+
+            yield return CacheService.GetText(
+                topicsUrl, topicsKey,
+                t => { topicsRaw = t; topOk = true; },
+                e => { topOk = false; }
+            );
+
+            if (!topOk || string.IsNullOrEmpty(topicsRaw)) continue;
+
+            var topics = JsonFlex.ParseTopics(topicsRaw) ?? new List<TopicData>();
+            foreach (var t in topics)
+            {
+                string ansRel = $"{s.id}/{t.id}/answers.json";
+                string ansUrl = StoragePaths.Practise(ansRel);
+                string ansKey = "json:" + StoragePaths.PractiseRoot + "/" + ansRel;
+
+                yield return CacheService.GetText(
+                    ansUrl, ansKey,
+                    _ => { },
+                    _ => { }
+                );
+            }
+        }
+
+        Debug.Log("[PrefetchController] PrefetchPracticeJsonOnly завершён");
     }
 }

@@ -1,4 +1,4 @@
-//// Assets/Scripts/Auth/AuthManager.cs
+п»ї//// AuthManager.cs вЂ” РґРѕР±Р°РІР»РµРЅ С…СѓРє РґР»СЏ PointsService.SetCurrentUid(...)
 //using System;
 //using System.Threading.Tasks;
 //using UnityEngine;
@@ -35,9 +35,9 @@
 
 //    public async Task<(bool ok, string err)> Register(string username, string realName, string password)
 //    {
-//        if (string.IsNullOrWhiteSpace(username)) return (false, "Введите имя пользователя");
-//        if (string.IsNullOrWhiteSpace(realName)) return (false, "Введите ваше имя");
-//        if (string.IsNullOrWhiteSpace(password) || password.Length < 6) return (false, "Пароль ? 6 символов");
+//        if (string.IsNullOrWhiteSpace(username)) return (false, "Р’РІРµРґРёС‚Рµ РёРјСЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ");
+//        if (string.IsNullOrWhiteSpace(realName)) return (false, "Р’РІРµРґРёС‚Рµ РІР°С€Рµ РёРјСЏ");
+//        if (string.IsNullOrWhiteSpace(password) || password.Length < 6) return (false, "РџР°СЂРѕР»СЊ ? 6 СЃРёРјРІРѕР»РѕРІ");
 
 //        await Init();
 //        string u = username.Trim().ToLowerInvariant();
@@ -45,35 +45,29 @@
 
 //        try
 //        {
-//            // 1) ник свободен?
 //            var unameDoc = _db.Collection("usernames").Document(u);
-//            if ((await unameDoc.GetSnapshotAsync()).Exists) return (false, "Ник уже занят");
+//            if ((await unameDoc.GetSnapshotAsync()).Exists) return (false, "РќРёРє СѓР¶Рµ Р·Р°РЅСЏС‚");
 
-//            // 2) создаём пользователя (v13+: возвращает AuthResult)
 //            AuthResult createRes = await _auth.CreateUserWithEmailAndPasswordAsync(email, password);
 //            var user = createRes?.User;
-//            if (user == null) return (false, "Создать пользователя не удалось");
+//            if (user == null) return (false, "РЎРѕР·РґР°С‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ СѓРґР°Р»РѕСЃСЊ");
 
-//            // 3) профиль + резерв ника батчем; createdAt = ServerTimestamp
 //            var userDoc = _db.Collection("users").Document(user.UserId);
 //            var batch = _db.StartBatch();
-//            batch.Set(userDoc, new
-//            {
-//                username = u,
-//                realName = realName,
-//                createdAt = FieldValue.ServerTimestamp
-//            }, SetOptions.MergeAll);
+//            batch.Set(userDoc, new { username = u, realName = realName, createdAt = FieldValue.ServerTimestamp }, SetOptions.MergeAll);
 //            batch.Set(unameDoc, new { uid = user.UserId });
 //            await batch.CommitAsync();
 
-//            // 4) displayName в Auth
 //            await user.UpdateUserProfileAsync(new Firebase.Auth.UserProfile { DisplayName = realName });
+
+//            // NEW: СѓРІРµРґРѕРјР»СЏРµРј PointsService Рѕ РЅРѕРІРѕРј РїРѕР»СЊР·РѕРІР°С‚РµР»Рµ
+//            PointsService.SetCurrentUid(user.UserId);
 
 //            OnSignedIn?.Invoke(user);
 //            return (true, null);
 //        }
 //        catch (FirebaseException fe) { return (false, MapAuthError(fe)); }
-//        catch (Exception e) { Debug.LogException(e); return (false, "Неизвестная ошибка"); }
+//        catch (Exception e) { Debug.LogException(e); return (false, "РќРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°"); }
 //    }
 
 //    public async Task<(bool ok, string err)> SignIn(string username, string password)
@@ -84,18 +78,23 @@
 //            string email = $"{username.Trim().ToLowerInvariant()}@ort.app";
 //            AuthResult signInRes = await _auth.SignInWithEmailAndPasswordAsync(email, password);
 //            var user = signInRes?.User;
-//            if (user == null) return (false, "Неверные данные");
+//            if (user == null) return (false, "РќРµРІРµСЂРЅС‹Рµ РґР°РЅРЅС‹Рµ");
+
+//            // NEW: СѓРІРµРґРѕРјР»СЏРµРј PointsService Рѕ РІРѕС€РµРґС€РµРј РїРѕР»СЊР·РѕРІР°С‚РµР»Рµ
+//            PointsService.SetCurrentUid(user.UserId);
 
 //            OnSignedIn?.Invoke(user);
 //            return (true, null);
 //        }
 //        catch (FirebaseException fe) { return (false, MapAuthError(fe)); }
-//        catch (Exception e) { Debug.LogException(e); return (false, "Неизвестная ошибка"); }
+//        catch (Exception e) { Debug.LogException(e); return (false, "РќРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°"); }
 //    }
 
 //    public void SignOut()
 //    {
 //        _auth?.SignOut();
+//        // NEW: СЃР±СЂР°СЃС‹РІР°РµРј РїСЂРёРІСЏР·РєСѓ РѕС‡РєРѕРІ
+//        PointsService.SetCurrentUid(null);
 //        OnSignedOut?.Invoke();
 //    }
 
@@ -104,17 +103,18 @@
 //        var code = (AuthError)fe.ErrorCode;
 //        switch (code)
 //        {
-//            case AuthError.EmailAlreadyInUse: return "Ник уже используется";
-//            case AuthError.WeakPassword: return "Слабый пароль";
-//            case AuthError.InvalidEmail: return "Некорректный ник";
-//            case AuthError.WrongPassword: return "Неверный пароль";
-//            case AuthError.UserNotFound: return "Пользователь не найден";
-//            default: return "Ошибка авторизации";
+//            case AuthError.EmailAlreadyInUse: return "РќРёРє СѓР¶Рµ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ";
+//            case AuthError.WeakPassword: return "РЎР»Р°Р±С‹Р№ РїР°СЂРѕР»СЊ";
+//            case AuthError.InvalidEmail: return "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РЅРёРє";
+//            case AuthError.WrongPassword: return "РќРµРІРµСЂРЅС‹Р№ РїР°СЂРѕР»СЊ";
+//            case AuthError.UserNotFound: return "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ";
+//            default: return "РћС€РёР±РєР° Р°РІС‚РѕСЂРёР·Р°С†РёРё";
 //        }
 //    }
 //}
 
-// AuthManager.cs — добавлен хук для PointsService.SetCurrentUid(...)
+
+// Assets/Scripts/Auth/AuthManager.cs
 using System;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -151,9 +151,9 @@ public class AuthManager : MonoBehaviour
 
     public async Task<(bool ok, string err)> Register(string username, string realName, string password)
     {
-        if (string.IsNullOrWhiteSpace(username)) return (false, "Введите имя пользователя");
-        if (string.IsNullOrWhiteSpace(realName)) return (false, "Введите ваше имя");
-        if (string.IsNullOrWhiteSpace(password) || password.Length < 6) return (false, "Пароль ? 6 символов");
+        if (string.IsNullOrWhiteSpace(username)) return (false, "Р’РІРµРґРёС‚Рµ РёРјСЏ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ");
+        if (string.IsNullOrWhiteSpace(realName)) return (false, "Р’РІРµРґРёС‚Рµ РІР°С€Рµ РёРјСЏ");
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 6) return (false, "РџР°СЂРѕР»СЊ в‰Ґ 6 СЃРёРјРІРѕР»РѕРІ");
 
         await Init();
         string u = username.Trim().ToLowerInvariant();
@@ -162,11 +162,11 @@ public class AuthManager : MonoBehaviour
         try
         {
             var unameDoc = _db.Collection("usernames").Document(u);
-            if ((await unameDoc.GetSnapshotAsync()).Exists) return (false, "Ник уже занят");
+            if ((await unameDoc.GetSnapshotAsync()).Exists) return (false, "РќРёРє СѓР¶Рµ Р·Р°РЅСЏС‚");
 
             AuthResult createRes = await _auth.CreateUserWithEmailAndPasswordAsync(email, password);
             var user = createRes?.User;
-            if (user == null) return (false, "Создать пользователя не удалось");
+            if (user == null) return (false, "РЎРѕР·РґР°С‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ РЅРµ СѓРґР°Р»РѕСЃСЊ");
 
             var userDoc = _db.Collection("users").Document(user.UserId);
             var batch = _db.StartBatch();
@@ -176,14 +176,15 @@ public class AuthManager : MonoBehaviour
 
             await user.UpdateUserProfileAsync(new Firebase.Auth.UserProfile { DisplayName = realName });
 
-            // NEW: уведомляем PointsService о новом пользователе
+            // рџ”№ РџСЂРёРІСЏР·РєР° РѕС‡РєРѕРІ Рё РїСЂРѕРіСЂРµСЃСЃР° Рє Р°РєРєР°СѓРЅС‚Сѓ
             PointsService.SetCurrentUid(user.UserId);
+            CourseProgress.SetUser(user.UserId);
 
             OnSignedIn?.Invoke(user);
             return (true, null);
         }
         catch (FirebaseException fe) { return (false, MapAuthError(fe)); }
-        catch (Exception e) { Debug.LogException(e); return (false, "Неизвестная ошибка"); }
+        catch (Exception e) { Debug.LogException(e); return (false, "РќРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°"); }
     }
 
     public async Task<(bool ok, string err)> SignIn(string username, string password)
@@ -194,23 +195,26 @@ public class AuthManager : MonoBehaviour
             string email = $"{username.Trim().ToLowerInvariant()}@ort.app";
             AuthResult signInRes = await _auth.SignInWithEmailAndPasswordAsync(email, password);
             var user = signInRes?.User;
-            if (user == null) return (false, "Неверные данные");
+            if (user == null) return (false, "РќРµРІРµСЂРЅС‹Рµ РґР°РЅРЅС‹Рµ");
 
-            // NEW: уведомляем PointsService о вошедшем пользователе
+            // рџ”№ РџСЂРёРІСЏР·РєР° РѕС‡РєРѕРІ Рё РїСЂРѕРіСЂРµСЃСЃР° Рє Р°РєРєР°СѓРЅС‚Сѓ
             PointsService.SetCurrentUid(user.UserId);
+            CourseProgress.SetUser(user.UserId);
 
             OnSignedIn?.Invoke(user);
             return (true, null);
         }
         catch (FirebaseException fe) { return (false, MapAuthError(fe)); }
-        catch (Exception e) { Debug.LogException(e); return (false, "Неизвестная ошибка"); }
+        catch (Exception e) { Debug.LogException(e); return (false, "РќРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°"); }
     }
 
     public void SignOut()
     {
         _auth?.SignOut();
-        // NEW: сбрасываем привязку очков
+        // рџ”№ РЎР±СЂРѕСЃРёС‚СЊ РїСЂРёРІСЏР·РєСѓ РїСЂРё РІС‹С…РѕРґРµ
         PointsService.SetCurrentUid(null);
+        CourseProgress.SetUser(null);
+
         OnSignedOut?.Invoke();
     }
 
@@ -219,12 +223,12 @@ public class AuthManager : MonoBehaviour
         var code = (AuthError)fe.ErrorCode;
         switch (code)
         {
-            case AuthError.EmailAlreadyInUse: return "Ник уже используется";
-            case AuthError.WeakPassword: return "Слабый пароль";
-            case AuthError.InvalidEmail: return "Некорректный ник";
-            case AuthError.WrongPassword: return "Неверный пароль";
-            case AuthError.UserNotFound: return "Пользователь не найден";
-            default: return "Ошибка авторизации";
+            case AuthError.EmailAlreadyInUse: return "РќРёРє СѓР¶Рµ РёСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ";
+            case AuthError.WeakPassword: return "РЎР»Р°Р±С‹Р№ РїР°СЂРѕР»СЊ";
+            case AuthError.InvalidEmail: return "РќРµРєРѕСЂСЂРµРєС‚РЅС‹Р№ РЅРёРє";
+            case AuthError.WrongPassword: return "РќРµРІРµСЂРЅС‹Р№ РїР°СЂРѕР»СЊ";
+            case AuthError.UserNotFound: return "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ";
+            default: return "РћС€РёР±РєР° Р°РІС‚РѕСЂРёР·Р°С†РёРё";
         }
     }
 }

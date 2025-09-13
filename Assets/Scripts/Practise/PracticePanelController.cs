@@ -1,4 +1,4 @@
-//// PracticePanelController.cs — устанавливаем текущий uid для очков
+//// PracticePanelController.cs
 //using System.Collections;
 //using System.Collections.Generic;
 //using UnityEngine;
@@ -31,7 +31,7 @@
 
 //    void OnEnable()
 //    {
-//        // Новое: привязываем локальное хранилище к текущему пользователю
+//        // Привязываем локальное хранилище очков к текущему пользователю
 //        var user = AuthManager.Instance ? AuthManager.Instance.CurrentUser : null;
 //        PointsService.SetCurrentUid(user != null ? user.UserId : null);
 
@@ -45,7 +45,8 @@
 //            };
 
 //        ShowOnly(subjects: true);
-//        StartCoroutine(LoadSubjects());
+//        //StartCoroutine(LoadSubjects());
+//        StartCoroutine(PracticeVersion.RefreshAndThen(() => StartCoroutine(LoadSubjects())));
 //    }
 
 //    void OnApplicationPause(bool pause)
@@ -66,7 +67,7 @@
 //    void ShowSubjects()
 //    {
 //        ShowOnly(subjects: true);
-//        if (headerText) headerText.text = "Предметы (Практика)";
+//        if (headerText) headerText.text = "Предметтер (Практика)";
 //        ClearChildren(subjectsContent);
 //        foreach (var s in subjects)
 //        {
@@ -85,9 +86,29 @@
 //        string rel = $"{subjectId}/topics.json";
 //        string url = StoragePaths.Practise(rel);
 
-//        yield return CacheService.GetText(url, "json:" + StoragePaths.PractiseRoot + "/" + rel,
-//            text => { topics = JsonFlex.ParseTopics(text) ?? new List<TopicData>(); ShowTopics(subjectName); },
-//            err => Debug.LogError($"[Practice/Topics] {err} url={url}"));
+//        yield return CacheService.GetText(
+//            url,
+//            "json:" + StoragePaths.PractiseRoot + "/" + rel,
+//            text =>
+//            {
+//                topics = JsonFlex.ParseTopics(text) ?? new List<TopicData>();
+//                if (topics.Count == 0)
+//                {
+//                    // Нет тем — просто возвращаемся к списку предметов
+//                    ShowOnly(subjects: true, topics: false);
+//                }
+//                else
+//                {
+//                    ShowTopics(subjectName);
+//                }
+//            },
+//            err =>
+//            {
+//                Debug.LogError($"[Practice/Topics] {err} url={url}");
+//                // Ошибка / файла нет — тоже на список предметов
+//                ShowOnly(subjects: true, topics: false);
+//            }
+//        );
 //    }
 
 //    void ShowTopics(string subjectName)
@@ -96,16 +117,19 @@
 //        if (headerText) headerText.text = subjectName + " (Практика)";
 //        ClearChildren(topicsContent);
 //        _topicBtns.Clear();
+
 //        foreach (var t in topics)
 //        {
 //            var go = Instantiate(topicProgressButtonPrefab, topicsContent);
 //            var pb = go.GetComponent<ProgressTopicButton>();
 //            if (!pb) continue;
+
 //            pb.Setup(currentSubjectId, t.id, t.name, onClick: () =>
 //            {
 //                if (oneQuestionPanel)
 //                    oneQuestionPanel.Open(currentSubjectId, t.id, t.name);
 //            });
+
 //            _topicBtns[t.id] = pb;
 //        }
 //    }
@@ -123,9 +147,7 @@
 //    }
 //}
 
-//// ===============================
 // PracticePanelController.cs
-//// ===============================
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -172,7 +194,8 @@ public class PracticePanelController : MonoBehaviour
             };
 
         ShowOnly(subjects: true);
-        StartCoroutine(LoadSubjects());
+        // проверка версии + загрузка предметов
+        StartCoroutine(PracticeVersion.RefreshAndThen(() => StartCoroutine(LoadSubjects())));
     }
 
     void OnApplicationPause(bool pause)
@@ -212,8 +235,6 @@ public class PracticePanelController : MonoBehaviour
         string rel = $"{subjectId}/topics.json";
         string url = StoragePaths.Practise(rel);
 
-        bool showedToast = false;
-
         yield return CacheService.GetText(
             url,
             "json:" + StoragePaths.PractiseRoot + "/" + rel,
@@ -222,10 +243,8 @@ public class PracticePanelController : MonoBehaviour
                 topics = JsonFlex.ParseTopics(text) ?? new List<TopicData>();
                 if (topics.Count == 0)
                 {
-                    // Нет тем — показываем тост и остаёмся на списке предметов
-                    try { PracticeOneQuestionToast.Show("Жакында ачылат", 2.8f); } catch { }
+                    // Нет тем — просто возвращаемся к списку предметов
                     ShowOnly(subjects: true, topics: false);
-                    showedToast = true;
                 }
                 else
                 {
@@ -235,10 +254,8 @@ public class PracticePanelController : MonoBehaviour
             err =>
             {
                 Debug.LogError($"[Practice/Topics] {err} url={url}");
-                // Ошибка / файла нет — такой же тост
-                try { PracticeOneQuestionToast.Show("Жакында ачылат", 2.8f); } catch { }
+                // Ошибка / файла нет — тоже на список предметов
                 ShowOnly(subjects: true, topics: false);
-                showedToast = true;
             }
         );
     }
