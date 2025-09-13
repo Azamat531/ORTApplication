@@ -4,6 +4,9 @@
 //using System.Collections;
 //using System.Collections.Generic;
 //using System.IO;
+//using UnityEngine.Networking;
+//using System;
+//using System.Linq;
 
 //public class CoursesPanelController : MonoBehaviour
 //{
@@ -44,10 +47,14 @@
 //    [SerializeField] private float popupDuration = 2f;
 //    private Coroutine popupRoutine;
 
+//    [Header("Debug")]
+//    [Tooltip("При входе на панель удаляем кэш subjects.json, чтобы всё тянуть из сети.")]
+//    public bool forceFreshSubjectsOnEnable = false;
+
 //    // ---- Данные ----
-//    private List<SubjectData> subjects = new();
-//    private List<TopicData> topics = new();
-//    private List<SubtopicIndex> subtopics = new();
+//    private List<SubjectData> subjects = new List<SubjectData>();
+//    private List<TopicData> topics = new List<TopicData>();
+//    private List<SubtopicIndex> subtopics = new List<SubtopicIndex>();
 
 //    private string currentSubjectId, currentSubjectName;
 //    private string currentTopicId, currentTopicName;
@@ -56,8 +63,31 @@
 //    // ждём просмотр v2 почти до конца
 //    private bool waitingForSolution = false;
 
+//    // хранить «какую версию отрисовали»
+//    private string shownSubjectsVersion = null;
+//    // чтобы прямой GET не применялся дважды
+//    private bool appliedDirectOnce = false;
+
+//    // singleton-сторож (чтоб не было двух контроллеров сразу)
+//    private static CoursesPanelController _active;
+//    void Awake()
+//    {
+//        if (_active != null && _active != this)
+//        {
+//            Debug.LogWarning("[DBG] duplicate CoursesPanelController, disabling: " + name);
+//            gameObject.SetActive(false);
+//            return;
+//        }
+//        _active = this;
+//    }
+//    void OnDestroy() { if (_active == this) _active = null; }
+
 //    void OnEnable()
 //    {
+//        // Сколько контроллеров в сцене
+//        var all = FindObjectsOfType<CoursesPanelController>(true);
+//        Debug.Log($"[DBG] CoursesPanelController instances in scene: {all.Length}. This: {name} (active={gameObject.activeInHierarchy})");
+
 //        CacheService.LogPersistentPath();
 
 //        if (!prefetchController)
@@ -66,7 +96,11 @@
 //        if (backFromSubtopicsButton)
 //        {
 //            backFromSubtopicsButton.onClick.RemoveAllListeners();
-//            backFromSubtopicsButton.onClick.AddListener(() => ShowOnly(topics: true));
+//            backFromSubtopicsButton.onClick.AddListener(() =>
+//            {
+//                ShowOnly(topics: true);
+//                ShowTopics(currentSubjectName);
+//            });
 //        }
 
 //        if (testButton)
@@ -81,11 +115,9 @@
 //            testController.ExitRequested -= OnExitTest;
 //            testController.ExitRequested += OnExitTest;
 
-//            // результат теста
 //            testController.TestFinished -= OnTestFinished;
 //            testController.TestFinished += OnTestFinished;
 
-//            // почти конец решения (v2)
 //            if (testController.solutionVideoPlayer)
 //            {
 //                testController.solutionVideoPlayer.nearEndSeconds = 10f;
@@ -95,6 +127,8 @@
 //        }
 
 //        if (popupImage) popupImage.gameObject.SetActive(false);
+
+//        if (forceFreshSubjectsOnEnable) RemoveSubjectsCache();   // на отладке — чистим кэш
 
 //        ShowOnly(subjects: true);
 //        StartCoroutine(LoadSubjects());
@@ -113,27 +147,118 @@
 //    // =================== Subjects ===================
 //    IEnumerator LoadSubjects()
 //    {
-//        string rel = $"subjects.json";
+//        appliedDirectOnce = false; // новая загрузка — позволим direct-ветке один раз обновить UI
+
+//        string rel = "subjects.json";
 //        string url = StoragePaths.Content(rel);
+//        string cacheKey = "json:" + StoragePaths.ContentRoot + "/" + rel;
+
+//        Debug.Log($"[DBG] LoadSubjects() url={url}  cacheKey={cacheKey}");
+
+//        // Параллельно: прямой сетевой запрос — И ТЕПЕРЬ он не только логирует, но и ПРИМЕНЯЕТ, если список отличается
+//        StartCoroutine(DirectFetchAndApplyIfDifferent(url));
 
 //        yield return CacheService.GetText(
 //            url,
-//            "json:" + StoragePaths.ContentRoot + "/" + rel,
+//            cacheKey,
 //            onDone: text =>
 //            {
-//                subjects = JsonFlex.ParseSubjects(text) ?? new List<SubjectData>();
 //                string ver = ContentVersion.Extract(text);
+//                var list = JsonFlex.ParseSubjects(text) ?? new List<SubjectData>();
 
-//                if (ContentVersion.ShouldPrefetch(ver) && prefetchController && subjects.Count > 0)
+//                Debug.Log($"[DBG] GetText->onDone (cache or fresh) version={ver}  subjects.count={list.Count}  sample={SampleSubjects(list)}");
+
+//                // отрисовали то, что пришло первым (часто — кэш)
+//                ApplySubjectsToUI(list, ver, reason: "GetText onDone");
+
+//                // если ContentVersion считает, что версия новая — параноидально попробуем подтянуть напрямую
+//                if (ContentVersion.ShouldPrefetch(ver))
 //                {
-//                    StartCoroutine(prefetchController.PrefetchAllSubjects(subjects));
-//                    ContentVersion.Save(ver);
+//                    Debug.Log($"[DBG] ShouldPrefetch=TRUE (saved != {ver}). Force refresh from network...");
+//                    StartCoroutine(ForceReloadSubjectsFromNetwork(url, ver));
 //                }
-
-//                ShowSubjects();
 //            },
 //            onError: err => Debug.LogError($"[Subjects] {err} url={url}")
 //        );
+//    }
+
+//    /// Прямой сетевой запрос с cache-buster: если список/версия отличаются от уже показанных — применяем сразу.
+//    private IEnumerator DirectFetchAndApplyIfDifferent(string baseUrl)
+//    {
+//        string freshUrl = baseUrl + (baseUrl.Contains("?") ? "&" : "?") + "_cb=" + DateTime.UtcNow.Ticks;
+//        using (var req = UnityWebRequest.Get(freshUrl))
+//        {
+//            yield return req.SendWebRequest();
+//#if UNITY_2020_2_OR_NEWER
+//            bool ok = req.result == UnityWebRequest.Result.Success;
+//#else
+//            bool ok = !req.isNetworkError && !req.isHttpError;
+//#endif
+//            if (!ok)
+//            {
+//                Debug.LogWarning($"[DBG] Direct GET FAILED: {req.responseCode} {req.error}");
+//                yield break;
+//            }
+
+//            string json = req.downloadHandler.text;
+//            var list = JsonFlex.ParseSubjects(json) ?? new List<SubjectData>();
+//            string ver = ContentVersion.Extract(json);
+
+//            Debug.Log($"[DBG] Direct GET OK: version={ver}  subjects.count={list.Count}  sample={SampleSubjects(list)}  url={freshUrl}");
+
+//            // Если уже применяли direct-результат — не дублируем
+//            if (appliedDirectOnce) yield break;
+
+//            // Условие «данные другие?»
+//            bool different =
+//                shownSubjectsVersion == null ||
+//                !string.Equals(shownSubjectsVersion, ver, StringComparison.Ordinal) ||
+//                list.Count != subjects.Count ||
+//                !SameIds(list, subjects);
+
+//            if (different)
+//            {
+//                ApplySubjectsToUI(list, ver, reason: "Direct GET");
+//                appliedDirectOnce = true;
+//                ContentVersion.Save(ver);
+//            }
+//        }
+//    }
+
+//    /// Жёстко загружаем из сети и применяем (когда ShouldPrefetch сработал по кэш-версии).
+//    private IEnumerator ForceReloadSubjectsFromNetwork(string baseUrl, string newVersion)
+//    {
+//        RemoveSubjectsCache();
+
+//        string freshUrl = baseUrl + (baseUrl.Contains("?") ? "&" : "?") + "_cb=" + DateTime.UtcNow.Ticks;
+//        using (var req = UnityWebRequest.Get(freshUrl))
+//        {
+//            yield return req.SendWebRequest();
+//#if UNITY_2020_2_OR_NEWER
+//            if (req.result != UnityWebRequest.Result.Success)
+//#else
+//            if (req.isNetworkError || req.isHttpError)
+//#endif
+//            {
+//                Debug.LogWarning("[Subjects] network refresh failed: " + req.error);
+//                yield break;
+//            }
+
+//            string freshJson = req.downloadHandler.text;
+//            var list = JsonFlex.ParseSubjects(freshJson) ?? new List<SubjectData>();
+
+//            ApplySubjectsToUI(list, newVersion, reason: "Force reload");
+//            ContentVersion.Save(newVersion);
+//        }
+//    }
+
+//    private void ApplySubjectsToUI(List<SubjectData> list, string version, string reason)
+//    {
+//        subjects = list ?? new List<SubjectData>();
+//        shownSubjectsVersion = version;
+
+//        ShowSubjects();
+//        Debug.Log($"[DBG] APPLY ({reason}) -> shownVersion={shownSubjectsVersion}  renderCount={subjects.Count} children={subjectsContent?.childCount ?? -1}");
 //    }
 
 //    void ShowSubjects()
@@ -152,6 +277,7 @@
 //                StartCoroutine(LoadTopics(currentSubjectId, currentSubjectName));
 //            });
 //        }
+//        Debug.Log($"[DBG] RENDER subjects: count={subjects.Count}  children={subjectsContent?.childCount ?? -1}");
 //    }
 
 //    // =================== Topics ===================
@@ -159,6 +285,7 @@
 //    {
 //        string rel = $"{subjectId}/topics.json";
 //        string url = StoragePaths.Content(rel);
+//        Debug.Log($"[DBG] LoadTopics() url={url}");
 
 //        yield return CacheService.GetText(
 //            url,
@@ -166,6 +293,7 @@
 //            onDone: text =>
 //            {
 //                topics = JsonFlex.ParseTopics(text) ?? new List<TopicData>();
+//                Debug.Log($"[DBG] topics.count={topics.Count}  first={(topics.Count > 0 ? topics[0].name : "-")}");
 //                ShowTopics(subjectName);
 //            },
 //            onError: err => Debug.LogError($"[Topics] {err} url={url}")
@@ -187,7 +315,6 @@
 //            bool unlocked = (i == 0) || CourseProgress.IsTopicDone(currentSubjectId, topics[i - 1].id);
 //            bool locked = !unlocked;
 
-//            // приглушаем вместо CanvasGroup
 //            DimHierarchy(btn.transform, locked ? 0.6f : 1f);
 
 //            btn.onClick.RemoveAllListeners();
@@ -206,6 +333,7 @@
 //    {
 //        string rel = $"{subjectId}/{topicId}/subtopics.json";
 //        string url = StoragePaths.Content(rel);
+//        Debug.Log($"[DBG] LoadSubtopics() url={url}");
 
 //        yield return CacheService.GetText(
 //            url,
@@ -213,6 +341,15 @@
 //            onDone: text =>
 //            {
 //                subtopics = JsonFlex.ParseSubtopics(text) ?? new List<SubtopicIndex>();
+//                Debug.Log($"[DBG] subtopics.count={subtopics.Count}  first={(subtopics.Count > 0 ? subtopics[0].title : "-")}");
+//                if (subtopics.Count == 0)
+//                {
+//                    CourseProgress.MarkTopicDone(subjectId, topicId);
+//                    ShowOnly(topics: true);
+//                    ShowTopics(currentSubjectName);
+//                    return;
+//                }
+
 //                ShowSubtopics(topicName);
 //            },
 //            onError: err => Debug.LogError($"[Subtopics] {err} url={url}")
@@ -235,7 +372,6 @@
 //            bool unlocked = (i == 0) || CourseProgress.IsSubtopicDone(currentSubjectId, currentTopicId, subtopics[i - 1].id);
 //            bool locked = !unlocked;
 
-//            // приглушаем вместо CanvasGroup
 //            DimHierarchy(go.transform, locked ? 0.6f : 1f);
 
 //            btn.onClick.RemoveAllListeners();
@@ -264,7 +400,6 @@
 //                if (testButton) testButton.interactable = (s.answers != null && s.answers.Count > 0);
 //            });
 
-//            // Кнопка «Скачать»
 //            var dlBtn = go.transform.Find("DownloadButton")?.GetComponent<Button>();
 //            if (dlBtn && prefetchController)
 //            {
@@ -316,14 +451,11 @@
 //    {
 //        if (!waitingForSolution || currentSubtopic == null) return;
 
-//        // На всякий случай проверим, что это v2
 //        if (url != null && url.EndsWith("/v2") == false && !url.Contains("/v2"))
 //            return;
 
 //        waitingForSolution = false;
 //        MarkSubtopicComplete();
-
-//        // обновим список подтем (разблокируем следующую)
 //        ShowSubtopics(currentTopicName);
 //    }
 
@@ -340,9 +472,12 @@
 //    private bool AreAllSubtopicsDone(string subjectId, string topicId, List<SubtopicIndex> list)
 //    {
 //        if (list == null || list.Count == 0) return false;
-//        foreach (var s in list)
+//        for (int i = 0; i < list.Count; i++)
+//        {
+//            var s = list[i];
 //            if (!CourseProgress.IsSubtopicDone(subjectId, topicId, s.id))
 //                return false;
+//        }
 //        return true;
 //    }
 
@@ -429,7 +564,6 @@
 
 //        if (testButton) testButton.interactable = currentSubtopic != null && currentSubtopic.answers != null && currentSubtopic.answers.Count > 0;
 
-//        // Перерисуем (на случай, если подтема уже засчиталась)
 //        if (!string.IsNullOrEmpty(currentTopicId))
 //            ShowSubtopics(currentTopicName);
 //    }
@@ -465,11 +599,10 @@
 //        popupRoutine = null;
 //    }
 
-//    // ==== НОВОЕ: приглушение без CanvasGroup ====
 //    private static void DimHierarchy(Transform root, float alpha)
 //    {
 //        if (!root) return;
-//        var graphics = root.GetComponentsInChildren<Graphic>(true); // Image, TMP_Text и т.п.
+//        var graphics = root.GetComponentsInChildren<Graphic>(true);
 //        for (int i = 0; i < graphics.Length; i++)
 //        {
 //            var g = graphics[i];
@@ -478,35 +611,42 @@
 //            g.color = c;
 //        }
 //    }
-//}
 
-///* ============================
-//   ПРОСТОЙ ЛОКАЛЬНЫЙ ПРОГРЕСС
-//   ============================ */
-//static class CourseProgress
-//{
-//    private static string KeySubtopic(string subjectId, string topicId, string subtopicId)
-//        => $"course.subtopic.done:{subjectId}:{topicId}:{subtopicId}";
-
-//    private static string KeyTopic(string subjectId, string topicId)
-//        => $"course.topic.done:{subjectId}:{topicId}";
-
-//    public static bool IsSubtopicDone(string subjectId, string topicId, string subtopicId)
-//        => PlayerPrefs.GetInt(KeySubtopic(subjectId, topicId, subtopicId), 0) == 1;
-
-//    public static void MarkSubtopicDone(string subjectId, string topicId, string subtopicId)
+//    private void RemoveSubjectsCache()
 //    {
-//        PlayerPrefs.SetInt(KeySubtopic(subjectId, topicId, subtopicId), 1);
-//        PlayerPrefs.Save();
+//        try
+//        {
+//            string rel = "subjects.json";
+//            string cacheKey = "json:" + StoragePaths.ContentRoot + "/" + rel;
+//            string encPath = CacheService.GetCachedPath(cacheKey, ".json");
+//            if (!string.IsNullOrEmpty(encPath) && File.Exists(encPath))
+//            {
+//                File.Delete(encPath);
+//                Debug.Log("[DBG] subjects cache removed: " + encPath);
+//            }
+//        }
+//        catch (Exception e)
+//        {
+//            Debug.LogWarning("[DBG] cache remove error: " + e.Message);
+//        }
 //    }
 
-//    public static bool IsTopicDone(string subjectId, string topicId)
-//        => PlayerPrefs.GetInt(KeyTopic(subjectId, topicId), 0) == 1;
-
-//    public static void MarkTopicDone(string subjectId, string topicId)
+//    // ======== helpers ========
+//    private string SampleSubjects(List<SubjectData> list)
 //    {
-//        PlayerPrefs.SetInt(KeyTopic(subjectId, topicId), 1);
-//        PlayerPrefs.Save();
+//        if (list == null || list.Count == 0) return "(empty)";
+//        var items = list.Take(4).Select(s => $"{s.id}:{s.name}");
+//        return string.Join(" | ", items);
+//    }
+
+//    private bool SameIds(List<SubjectData> a, List<SubjectData> b)
+//    {
+//        if (a == null || b == null || a.Count != b.Count) return false;
+//        for (int i = 0; i < a.Count; i++)
+//        {
+//            if (!string.Equals(a[i].id, b[i].id, StringComparison.Ordinal)) return false;
+//        }
+//        return true;
 //    }
 //}
 
@@ -517,6 +657,9 @@ using TMPro;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using UnityEngine.Networking;
+using System;
+using System.Linq;
 
 public class CoursesPanelController : MonoBehaviour
 {
@@ -552,10 +695,18 @@ public class CoursesPanelController : MonoBehaviour
     public Sprite downloadIdleIcon;
     public Sprite downloadDoneIcon;
 
+    [Header("Empty/Popup UI")]
+    [Tooltip("Панель/окно, которое показываем, если у предмета нет тем. Содержание заполнишь сам.")]
+    public GameObject noTopicsPanel;
+
     [Header("Popup Image (сообщения)")]
     [SerializeField] private Image popupImage;
     [SerializeField] private float popupDuration = 2f;
     private Coroutine popupRoutine;
+
+    [Header("Debug")]
+    [Tooltip("При входе на панель удаляем кэш subjects.json, чтобы всё тянуть из сети.")]
+    public bool forceFreshSubjectsOnEnable = false;
 
     // ---- Данные ----
     private List<SubjectData> subjects = new List<SubjectData>();
@@ -569,8 +720,32 @@ public class CoursesPanelController : MonoBehaviour
     // ждём просмотр v2 почти до конца
     private bool waitingForSolution = false;
 
+    // предметы: какая версия показана и применяли ли прямой GET
+    private string shownSubjectsVersion = null;
+    private bool appliedSubjectsDirectOnce = false;
+
+    // темы: защита от двойного применения
+    private bool appliedTopicsDirectOnce = false;
+
+    // singleton-сторож
+    private static CoursesPanelController _active;
+    void Awake()
+    {
+        if (_active != null && _active != this)
+        {
+            Debug.LogWarning("[DBG] duplicate CoursesPanelController, disabling: " + name);
+            gameObject.SetActive(false);
+            return;
+        }
+        _active = this;
+    }
+    void OnDestroy() { if (_active == this) _active = null; }
+
     void OnEnable()
     {
+        var all = FindObjectsOfType<CoursesPanelController>(true);
+        Debug.Log($"[DBG] CoursesPanelController instances in scene: {all.Length}. This: {name} (active={gameObject.activeInHierarchy})");
+
         CacheService.LogPersistentPath();
 
         if (!prefetchController)
@@ -581,7 +756,6 @@ public class CoursesPanelController : MonoBehaviour
             backFromSubtopicsButton.onClick.RemoveAllListeners();
             backFromSubtopicsButton.onClick.AddListener(() =>
             {
-                // раньше мы только показывали контейнер тем — теперь ещё и перерисовываем список
                 ShowOnly(topics: true);
                 ShowTopics(currentSubjectName);
             });
@@ -599,11 +773,9 @@ public class CoursesPanelController : MonoBehaviour
             testController.ExitRequested -= OnExitTest;
             testController.ExitRequested += OnExitTest;
 
-            // результат теста
             testController.TestFinished -= OnTestFinished;
             testController.TestFinished += OnTestFinished;
 
-            // почти конец решения (v2)
             if (testController.solutionVideoPlayer)
             {
                 testController.solutionVideoPlayer.nearEndSeconds = 10f;
@@ -613,6 +785,9 @@ public class CoursesPanelController : MonoBehaviour
         }
 
         if (popupImage) popupImage.gameObject.SetActive(false);
+        if (noTopicsPanel) noTopicsPanel.SetActive(false);
+
+        if (forceFreshSubjectsOnEnable) RemoveSubjectsCache();
 
         ShowOnly(subjects: true);
         StartCoroutine(LoadSubjects());
@@ -631,27 +806,112 @@ public class CoursesPanelController : MonoBehaviour
     // =================== Subjects ===================
     IEnumerator LoadSubjects()
     {
-        string rel = $"subjects.json";
+        appliedSubjectsDirectOnce = false;
+
+        string rel = "subjects.json";
         string url = StoragePaths.Content(rel);
+        string cacheKey = "json:" + StoragePaths.ContentRoot + "/" + rel;
+
+        Debug.Log($"[DBG] LoadSubjects() url={url}  cacheKey={cacheKey}");
+
+        // Параллельный прямой GET
+        StartCoroutine(DirectSubjectsFetchAndApplyIfDifferent(url));
 
         yield return CacheService.GetText(
             url,
-            "json:" + StoragePaths.ContentRoot + "/" + rel,
+            cacheKey,
             onDone: text =>
             {
-                subjects = JsonFlex.ParseSubjects(text) ?? new List<SubjectData>();
                 string ver = ContentVersion.Extract(text);
+                var list = JsonFlex.ParseSubjects(text) ?? new List<SubjectData>();
 
-                if (ContentVersion.ShouldPrefetch(ver) && prefetchController && subjects.Count > 0)
+                Debug.Log($"[DBG] GetText->onDone (cache or fresh) version={ver}  subjects.count={list.Count}  sample={SampleSubjects(list)}");
+
+                ApplySubjectsToUI(list, ver, reason: "GetText onDone");
+
+                if (ContentVersion.ShouldPrefetch(ver))
                 {
-                    StartCoroutine(prefetchController.PrefetchAllSubjects(subjects));
-                    ContentVersion.Save(ver);
+                    Debug.Log($"[DBG] ShouldPrefetch=TRUE (saved != {ver}). Force refresh from network...");
+                    StartCoroutine(ForceReloadSubjectsFromNetwork(url, ver));
                 }
-
-                ShowSubjects();
             },
             onError: err => Debug.LogError($"[Subjects] {err} url={url}")
         );
+    }
+
+    private IEnumerator DirectSubjectsFetchAndApplyIfDifferent(string baseUrl)
+    {
+        string freshUrl = baseUrl + (baseUrl.Contains("?") ? "&" : "?") + "_cb=" + DateTime.UtcNow.Ticks;
+        using (var req = UnityWebRequest.Get(freshUrl))
+        {
+            yield return req.SendWebRequest();
+#if UNITY_2020_2_OR_NEWER
+            bool ok = req.result == UnityWebRequest.Result.Success;
+#else
+            bool ok = !req.isNetworkError && !req.isHttpError;
+#endif
+            if (!ok)
+            {
+                Debug.LogWarning($"[DBG] Direct GET (subjects) FAILED: {req.responseCode} {req.error}");
+                yield break;
+            }
+
+            string json = req.downloadHandler.text;
+            var list = JsonFlex.ParseSubjects(json) ?? new List<SubjectData>();
+            string ver = ContentVersion.Extract(json);
+
+            Debug.Log($"[DBG] Direct GET OK (subjects): version={ver}  subjects.count={list.Count}  sample={SampleSubjects(list)}  url={freshUrl}");
+
+            if (appliedSubjectsDirectOnce) yield break;
+
+            bool different =
+                shownSubjectsVersion == null ||
+                !string.Equals(shownSubjectsVersion, ver, StringComparison.Ordinal) ||
+                list.Count != subjects.Count ||
+                !SameSubjectIds(list, subjects);
+
+            if (different)
+            {
+                ApplySubjectsToUI(list, ver, reason: "Direct GET");
+                appliedSubjectsDirectOnce = true;
+                ContentVersion.Save(ver);
+            }
+        }
+    }
+
+    private IEnumerator ForceReloadSubjectsFromNetwork(string baseUrl, string newVersion)
+    {
+        RemoveSubjectsCache();
+
+        string freshUrl = baseUrl + (baseUrl.Contains("?") ? "&" : "?") + "_cb=" + DateTime.UtcNow.Ticks;
+        using (var req = UnityWebRequest.Get(freshUrl))
+        {
+            yield return req.SendWebRequest();
+#if UNITY_2020_2_OR_NEWER
+            if (req.result != UnityWebRequest.Result.Success)
+#else
+            if (req.isNetworkError || req.isHttpError)
+#endif
+            {
+                Debug.LogWarning("[Subjects] network refresh failed: " + req.error);
+                yield break;
+            }
+
+            string freshJson = req.downloadHandler.text;
+            var list = JsonFlex.ParseSubjects(freshJson) ?? new List<SubjectData>();
+
+            ApplySubjectsToUI(list, newVersion, reason: "Force reload");
+            ContentVersion.Save(newVersion);
+        }
+    }
+
+    private void ApplySubjectsToUI(List<SubjectData> list, string version, string reason)
+    {
+        subjects = list ?? new List<SubjectData>();
+        shownSubjectsVersion = version;
+
+        ShowSubjects();
+        Debug.Log($"[DBG] APPLY SUBJECTS ({reason}) -> shownVersion={shownSubjectsVersion}  renderCount={subjects.Count} children={subjectsContent?.childCount ?? -1}");
     }
 
     void ShowSubjects()
@@ -670,30 +930,104 @@ public class CoursesPanelController : MonoBehaviour
                 StartCoroutine(LoadTopics(currentSubjectId, currentSubjectName));
             });
         }
+        Debug.Log($"[DBG] RENDER subjects: count={subjects.Count}  children={subjectsContent?.childCount ?? -1}");
     }
 
     // =================== Topics ===================
     IEnumerator LoadTopics(string subjectId, string subjectName)
     {
+        appliedTopicsDirectOnce = false;
+
         string rel = $"{subjectId}/topics.json";
         string url = StoragePaths.Content(rel);
+        string cacheKey = "json:" + StoragePaths.ContentRoot + "/" + rel;
+
+        if (noTopicsPanel) noTopicsPanel.SetActive(false);
+        Debug.Log($"[DBG] LoadTopics() url={url}");
+
+        // Параллельный прямой GET
+        StartCoroutine(DirectTopicsFetchAndApplyIfDifferent(url, subjectId, subjectName));
 
         yield return CacheService.GetText(
             url,
-            "json:" + StoragePaths.ContentRoot + "/" + rel,
+            cacheKey,
             onDone: text =>
             {
-                topics = JsonFlex.ParseTopics(text) ?? new List<TopicData>();
-                ShowTopics(subjectName);
+                var list = JsonFlex.ParseTopics(text) ?? new List<TopicData>();
+                Debug.Log($"[DBG] topics(GetText).count={list.Count}  first={(list.Count > 0 ? list[0].name : "-")}");
+
+                ApplyTopicsToUI(list, subjectName, subjectId, reason: "GetText onDone");
             },
             onError: err => Debug.LogError($"[Topics] {err} url={url}")
         );
+    }
+
+    private IEnumerator DirectTopicsFetchAndApplyIfDifferent(string baseUrl, string subjectId, string subjectName)
+    {
+        string freshUrl = baseUrl + (baseUrl.Contains("?") ? "&" : "?") + "_cb=" + DateTime.UtcNow.Ticks;
+        using (var req = UnityWebRequest.Get(freshUrl))
+        {
+            yield return req.SendWebRequest();
+#if UNITY_2020_2_OR_NEWER
+            bool ok = req.result == UnityWebRequest.Result.Success;
+#else
+            bool ok = !req.isNetworkError && !req.isHttpError;
+#endif
+            if (!ok)
+            {
+                Debug.LogWarning($"[DBG] Direct GET (topics) FAILED: {req.responseCode} {req.error}");
+                yield break;
+            }
+
+            string json = req.downloadHandler.text;
+            var list = JsonFlex.ParseTopics(json) ?? new List<TopicData>();
+            Debug.Log($"[DBG] Direct GET OK (topics): count={list.Count} first={(list.Count > 0 ? list[0].name : "-")} url={freshUrl}");
+
+            if (appliedTopicsDirectOnce) yield break;
+            if (!string.Equals(currentSubjectId, subjectId, StringComparison.Ordinal)) yield break;
+
+            bool different = list.Count != topics.Count || !SameTopicIds(list, topics);
+            if (different)
+            {
+                ApplyTopicsToUI(list, subjectName, subjectId, reason: "Direct GET");
+                appliedTopicsDirectOnce = true;
+            }
+        }
+    }
+
+    private void ApplyTopicsToUI(List<TopicData> list, string subjectName, string subjectId, string reason)
+    {
+        if (!string.Equals(subjectId, currentSubjectId, StringComparison.Ordinal))
+        {
+            Debug.Log($"[DBG] APPLY TOPICS skipped ({reason}) — subject changed");
+            return;
+        }
+
+        topics = list ?? new List<TopicData>();
+
+        if (topics.Count == 0)
+        {
+            ShowOnly(topics: true);
+            if (headerText) headerText.text = subjectName;
+            ClearChildren(topicsContent);
+            if (noTopicsPanel) noTopicsPanel.SetActive(true);
+            Debug.Log($"[DBG] APPLY TOPICS ({reason}) -> EMPTY, noTopicsPanel shown");
+            return;
+        }
+        else
+        {
+            if (noTopicsPanel) noTopicsPanel.SetActive(false);
+        }
+
+        ShowTopics(subjectName);
+        Debug.Log($"[DBG] APPLY TOPICS ({reason}) -> renderCount={topics.Count}  children={topicsContent?.childCount ?? -1}");
     }
 
     void ShowTopics(string subjectName)
     {
         ShowOnly(topics: true);
         if (headerText) headerText.text = subjectName;
+        if (noTopicsPanel) noTopicsPanel.SetActive(false);
         ClearChildren(topicsContent);
 
         for (int i = 0; i < topics.Count; i++)
@@ -705,7 +1039,6 @@ public class CoursesPanelController : MonoBehaviour
             bool unlocked = (i == 0) || CourseProgress.IsTopicDone(currentSubjectId, topics[i - 1].id);
             bool locked = !unlocked;
 
-            // приглушаем без CanvasGroup
             DimHierarchy(btn.transform, locked ? 0.6f : 1f);
 
             btn.onClick.RemoveAllListeners();
@@ -724,6 +1057,7 @@ public class CoursesPanelController : MonoBehaviour
     {
         string rel = $"{subjectId}/{topicId}/subtopics.json";
         string url = StoragePaths.Content(rel);
+        Debug.Log($"[DBG] LoadSubtopics() url={url}");
 
         yield return CacheService.GetText(
             url,
@@ -731,8 +1065,7 @@ public class CoursesPanelController : MonoBehaviour
             onDone: text =>
             {
                 subtopics = JsonFlex.ParseSubtopics(text) ?? new List<SubtopicIndex>();
-
-                // ⬇️ ВАЖНО: если тема пустая — сразу считаем её пройденной и возвращаемся к списку тем
+                Debug.Log($"[DBG] subtopics.count={subtopics.Count}  first={(subtopics.Count > 0 ? subtopics[0].title : "-")}");
                 if (subtopics.Count == 0)
                 {
                     CourseProgress.MarkTopicDone(subjectId, topicId);
@@ -791,7 +1124,6 @@ public class CoursesPanelController : MonoBehaviour
                 if (testButton) testButton.interactable = (s.answers != null && s.answers.Count > 0);
             });
 
-            // Кнопка «Скачать»
             var dlBtn = go.transform.Find("DownloadButton")?.GetComponent<Button>();
             if (dlBtn && prefetchController)
             {
@@ -843,14 +1175,11 @@ public class CoursesPanelController : MonoBehaviour
     {
         if (!waitingForSolution || currentSubtopic == null) return;
 
-        // На всякий случай проверим, что это v2
         if (url != null && url.EndsWith("/v2") == false && !url.Contains("/v2"))
             return;
 
         waitingForSolution = false;
         MarkSubtopicComplete();
-
-        // обновим список подтем (разблокируем следующую)
         ShowSubtopics(currentTopicName);
     }
 
@@ -924,7 +1253,7 @@ public class CoursesPanelController : MonoBehaviour
         string query = q >= 0 ? url.Substring(q) : string.Empty;
         string ext = Path.GetExtension(baseUrl);
         if (string.IsNullOrEmpty(ext)) return baseUrl + ".mp4" + query;
-        if (!ext.Equals(".mp4", System.StringComparison.OrdinalIgnoreCase))
+        if (!ext.Equals(".mp4", StringComparison.OrdinalIgnoreCase))
             baseUrl = baseUrl.Substring(0, baseUrl.Length - ext.Length) + ".mp4";
         return baseUrl + query;
     }
@@ -959,7 +1288,6 @@ public class CoursesPanelController : MonoBehaviour
 
         if (testButton) testButton.interactable = currentSubtopic != null && currentSubtopic.answers != null && currentSubtopic.answers.Count > 0;
 
-        // Перерисуем список подтем (на случай, если подтема уже засчиталась)
         if (!string.IsNullOrEmpty(currentTopicId))
             ShowSubtopics(currentTopicName);
     }
@@ -995,11 +1323,10 @@ public class CoursesPanelController : MonoBehaviour
         popupRoutine = null;
     }
 
-    // приглушение без CanvasGroup
     private static void DimHierarchy(Transform root, float alpha)
     {
         if (!root) return;
-        var graphics = root.GetComponentsInChildren<Graphic>(true); // Image, TMP_Text и т.п.
+        var graphics = root.GetComponentsInChildren<Graphic>(true);
         for (int i = 0; i < graphics.Length; i++)
         {
             var g = graphics[i];
@@ -1008,5 +1335,47 @@ public class CoursesPanelController : MonoBehaviour
             g.color = c;
         }
     }
-}
 
+    private void RemoveSubjectsCache()
+    {
+        try
+        {
+            string rel = "subjects.json";
+            string cacheKey = "json:" + StoragePaths.ContentRoot + "/" + rel;
+            string encPath = CacheService.GetCachedPath(cacheKey, ".json");
+            if (!string.IsNullOrEmpty(encPath) && File.Exists(encPath))
+            {
+                File.Delete(encPath);
+                Debug.Log("[DBG] subjects cache removed: " + encPath);
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[DBG] cache remove error: " + e.Message);
+        }
+    }
+
+    // ======== helpers ========
+    private string SampleSubjects(List<SubjectData> list)
+    {
+        if (list == null || list.Count == 0) return "(empty)";
+        var items = list.Take(4).Select(s => $"{s.id}:{s.name}");
+        return string.Join(" | ", items);
+    }
+
+    private bool SameSubjectIds(List<SubjectData> a, List<SubjectData> b)
+    {
+        if (a == null || b == null || a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (!string.Equals(a[i].id, b[i].id, StringComparison.Ordinal)) return false;
+        return true;
+    }
+
+    private bool SameTopicIds(List<TopicData> a, List<TopicData> b)
+    {
+        if (a == null || b == null || a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (!string.Equals(a[i].id, b[i].id, StringComparison.Ordinal)) return false;
+        return true;
+    }
+}
